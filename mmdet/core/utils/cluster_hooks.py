@@ -103,21 +103,22 @@ class ClusterHook(Hook):
                     )
                     uncertainty = self.get_uncertainty_by_part(pseudo_labels, pseudo_label2s, memory_features)
                     if self.cfg.PSEUDO_LABELS.hard_mining.use_hard_mining:
-                        pseudo_labels = transfer_label_noise_to_outlier(uncertainty, pseudo_labels[0])
+                        pseudo_labels, label_mask = transfer_label_noise_to_outlier(uncertainty, pseudo_labels[0])
 
-                    for iter in range(self.cfg.PSEUDO_LABELS.hard_mining.label_refine_iters):
-                        print("iter", iter)
-                        # pseudo_labels = label_refine_by_part(pseudo_labels[0], uncertainty)
-                        # pseudo_label2s = label_refine_by_part(pseudo_label2s[0], uncertainty)
-                        # pseudo_labels = label_refine_by_part2(self.cfg, pseudo_labels[0], uncertainty)
-                        # pseudo_label2s = label_refine_by_part2(self.cfg, pseudo_label2s[0], uncertainty)
-                        # uncertainty = self.get_uncertainty_by_part(memory_features, pseudo_labels, pseudo_label2s)
-                        update_pseudo_labels = label_refine_by_soft_labels(memory_features, pseudo_labels, pseudo_label2s, uncertainty)
-                        update_pseudo_label2s = label_refine_by_soft_labels(memory_features, pseudo_label2s, pseudo_labels, uncertainty)
-                        uncertainty = self.get_uncertainty_by_part(update_pseudo_labels, update_pseudo_label2s)
-                        pseudo_labels = update_pseudo_labels
-                        pseudo_label2s = update_pseudo_label2s
-                    
+                    label_mask = outlier_mask(pseudo_labels[0])
+                    # for iter in range(self.cfg.PSEUDO_LABELS.hard_mining.label_refine_iters):
+                    #     print("iter", iter)
+                    #     # pseudo_labels = label_refine_by_part(pseudo_labels[0], uncertainty)
+                    #     # pseudo_label2s = label_refine_by_part(pseudo_label2s[0], uncertainty)
+                    #     # pseudo_labels = label_refine_by_part2(self.cfg, pseudo_labels[0], uncertainty)
+                    #     # pseudo_label2s = label_refine_by_part2(self.cfg, pseudo_label2s[0], uncertainty)
+                    #     # uncertainty = self.get_uncertainty_by_part(memory_features, pseudo_labels, pseudo_label2s)
+                    #     update_pseudo_labels = label_refine_by_soft_labels(memory_features, pseudo_labels, pseudo_label2s, uncertainty)
+                    #     update_pseudo_label2s = label_refine_by_soft_labels(memory_features, pseudo_label2s, pseudo_labels, uncertainty)
+                    #     uncertainty = self.get_uncertainty_by_part(update_pseudo_labels, update_pseudo_label2s)
+                    #     pseudo_labels = update_pseudo_labels
+                    #     pseudo_label2s = update_pseudo_label2s
+                    torch.save(label_mask, os.path.join("saved_file", "label_mask.pth"))
                     torch.save(uncertainty, os.path.join("saved_file", "uncertainty.pth"))
 
             torch.save(pseudo_labels, os.path.join("saved_file", "pseudo_labels.pth"))
@@ -218,25 +219,42 @@ class ClusterHook(Hook):
             uncertainty[uncertainty <= uncertainty_threshold] = 0
         return uncertainty
 
+def outlier_mask(labels):
+    """
+        outliers变成False
+    """
+    label_count = collections.defaultdict(list)
+    mask = torch.ones(len(labels)).bool()
+    for i, label in enumerate(labels):
+        label_count[label].append(i)
+        
+    for i, label in enumerate(labels):
+        if len(label_count[label]) == 1:
+            mask[i] = False
+    return mask
+
 @torch.no_grad()
 def transfer_label_noise_to_outlier(uncertaintys, labels):
     """
         uncertainty: [N]
         labels: [N]
     """
+    print("transfer noisy label to outlier")
+    mask = torch.ones(len(labels)).bool()
     # 计算簇的大小
     labels = torch.tensor(labels)
     num_classes = labels.max() + 1
     uncertaintys = uncertaintys.tolist()
-    print("num_classes", num_classes)
+    print("old num of classes", num_classes)
     new_labels = labels.clone()
     for i, (uncertainty, label) in enumerate(zip(uncertaintys, labels)):
         if uncertainty == 0:
             new_labels[i] = num_classes
             num_classes += 1
+            mask[i] = False
     new_labels = reassignment_labels(new_labels.tolist())
-    print("new_labels num_classes", max(new_labels) + 1)
-    return [new_labels]
+    print("new num of classes", max(new_labels) + 1)
+    return [new_labels], mask
 
 @torch.no_grad()
 def label_refine_by_soft_labels(memory_features, pseudo_labels, pseudo_label2s, uncertainty):

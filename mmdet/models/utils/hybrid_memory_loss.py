@@ -14,7 +14,7 @@ import os
 from mmdet.utils import all_gather_tensor
 import sys
 import numpy as np
-sys.path.append("/home/linhuadong/CGPS/mmdet/models/utils")
+sys.path.append("/home/linhuadong/DNFNet/mmdet/models/utils")
 import min_search_cuda
 import max_search_cuda
 from torch.cuda.amp import custom_fwd, custom_bwd
@@ -367,7 +367,9 @@ class HybridMemoryMultiFocalPercent(nn.Module):
 
     def get_hard_cluster_loss(self, labels, cluster_inputs, targets, IoU, indexes):
         """
-            cluster_inputs: [B, N]
+            :cluster_inputs: [B, N]
+            :targets: [B]
+            :labels: [N]
         """
         B = cluster_inputs.shape[0]
 
@@ -387,6 +389,7 @@ class HybridMemoryMultiFocalPercent(nn.Module):
         sim = torch.zeros(labels.max() + 1, B).float().cuda() # C * B, unique label num: C = labels.max() + 1表示标签的数量
         sim.index_add_(0, labels, cluster_inputs.t().contiguous())  # 每一列表示minibatch中instance与同一个簇中所有instance的相似度的和
         nums = torch.zeros(labels.max() + 1, 1).float().cuda() # many instances belong to a cluster, so calculate the number of instances in a cluster
+        self.num_memory = labels.shape[0]
         nums.index_add_(0, labels, torch.ones(self.num_memory, 1).float().cuda()) # C * 1
         
         mask = (nums > 0).float()
@@ -394,14 +397,12 @@ class HybridMemoryMultiFocalPercent(nn.Module):
         mask = mask.expand_as(sim)
         masked_sim = self.masked_softmax_multi_focal(sim.t().contiguous(), mask.t().contiguous(), targets=targets, IoU=IoU, indexes=indexes, labels=labels) # sim: u * B, mask:u * B, masked_sim: B * u
         cluster_hard_loss = F.nll_loss(torch.log(masked_sim + 1e-6), targets, reduce=False)
-
-        # if self.hard_mining:
-        #     print("sssssssss")
-        #     files_path = self.load_uncertainty()
-        #     uncertainty = torch.load(files_path).cuda()
-        #     cluster_hard_loss = cluster_hard_loss * uncertainty[indexes]
-
+        
+        # label_mask = torch.load(os.path.join('saved_file', 'label_mask.pth')).cuda()
+        # target_label_mask = label_mask[indexes]
+        # cluster_hard_loss = cluster_hard_loss * target_label_mask
         cluster_hard_loss = cluster_hard_loss.mean()
+        
         return cluster_hard_loss
 
     def get_hard_cluster_loss_by_two_pseudo_labels(self, label1s, label2s, cluster_inputs, targets, target2s, IoU, indexes, features):
@@ -481,14 +482,26 @@ class HybridMemoryMultiFocalPercent(nn.Module):
         #     cluster_inputs = input_t * IoU_weight.unsqueeze(1)    # [N, B] * [N, ] = [N, B]
         #     cluster_inputs = cluster_inputs.t() # [B, N]
 
+        label_mask = torch.load(os.path.join('saved_file', 'label_mask.pth')).cuda()
+        target_label_mask = label_mask[indexes]
+        labels = labels[label_mask]
+        inputs = inputs[target_label_mask]
+        inputs = inputs.t()[label_mask].t()
+        bottom_inputs = bottom_inputs[target_label_mask]
+        bottom_inputs = bottom_inputs.t()[label_mask].t()
+        top_inputs = top_inputs[target_label_mask]
+        top_inputs = top_inputs.t()[label_mask].t()
+        targets = targets[target_label_mask]
+        
         if self.use_cluster_hard_loss:
-            losses["global_cluster_hard_loss"] = self.get_hard_cluster_loss(labels.clone(), inputs, targets, IoU, indexes)
-            if self.use_part_feat:
-                bottom_cluster_hard_loss = self.get_hard_cluster_loss(labels.clone(), bottom_inputs, targets, bottom_IoU, indexes)
-                top_cluster_hard_loss = self.get_hard_cluster_loss(labels.clone(), top_inputs, targets, top_IoU, indexes)
-                losses["part_cluster_hard_loss"] = bottom_cluster_hard_loss + top_cluster_hard_loss
-            else:
-                losses["part_cluster_hard_loss"] = torch.tensor(0.)
+            losses["global_cluster_hard_loss"] = torch.tensor(0.)
+            losses["part_cluster_hard_loss"] = torch.tensor(0.)
+            if targets.shape[0] > 0:
+                losses["global_cluster_hard_loss"] = self.get_hard_cluster_loss(labels.clone(), inputs, targets, IoU, indexes)
+                if self.use_part_feat:
+                    bottom_cluster_hard_loss = self.get_hard_cluster_loss(labels.clone(), bottom_inputs, targets, bottom_IoU, indexes)
+                    top_cluster_hard_loss = self.get_hard_cluster_loss(labels.clone(), top_inputs, targets, top_IoU, indexes)
+                    losses["part_cluster_hard_loss"] = bottom_cluster_hard_loss + top_cluster_hard_loss
             
             if self.co_learning:
                 losses["global_cluster_hard_loss2"] = self.get_hard_cluster_loss(label2s.clone(), inputs, target2s, IoU, indexes)

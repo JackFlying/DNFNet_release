@@ -5,10 +5,10 @@ _base_ = [
 ]
 TEST = False
 USE_PART_FEAT = True
-GLOBAL_WEIGHT = 0.5
+GLOBAL_WEIGHT = 0.9
 CO_LEARNING = False
+UNCERTAINTY = True
 HARD_MINING = False
-UNCERTAINTY = False
 model = dict(
     roi_head=dict(
         bbox_head=dict(
@@ -141,7 +141,7 @@ lr_config = dict(
     warmup='linear',
     warmup_iters=2242,
     warmup_ratio=1.0 / 200,
-    step=[16, 22])
+    step=[16, 22])  #[16, 22]
 total_epochs = 36
 
 SPCL=True
@@ -174,7 +174,7 @@ PSEUDO_LABELS = dict(
                     uncertainty=UNCERTAINTY,
                     ),
     hard_mining=dict(use_hard_mining=HARD_MINING,
-                    uncertainty_threshold=0.1,
+                    uncertainty_threshold=0.5,
                     label_refine_iters=0,
                     refine_global_weight=0.5
                     ),

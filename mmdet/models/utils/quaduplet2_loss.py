@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import os 
 
 class Quaduplet2Loss(nn.Module):
     """Triplet loss with hard positive/negative mining.
@@ -34,6 +35,10 @@ class Quaduplet2Loss(nn.Module):
         inputs_new = []
         bg = []
         targets_new = []
+        
+        label_mask = torch.load(os.path.join('saved_file', 'label_mask.pth')).cuda()    # [N, ]
+        target_label_mask = label_mask[index]
+        
         for i in range(len(targets)):
             if targets[i] < 0:
                 bg.append(inputs[i])
@@ -43,58 +48,51 @@ class Quaduplet2Loss(nn.Module):
 
         inputs_new = torch.stack(inputs_new)
         targets_new = torch.stack(targets_new)
+        # inputs_new = inputs_new[target_label_mask]
+        # targets_new = targets_new[target_label_mask]
         n = inputs_new.size(0)
-
+        loss = torch.tensor(0.).to(inputs_new.device)
+        if n == 0:
+            return loss
         # Compute pairwise distance, replace by the official when merged
         dist = torch.pow(inputs_new, 2).sum(dim=1, keepdim=True).expand(n, n)
         dist = dist + dist.t()
         dist.addmm_(1, -2, inputs_new, inputs_new.t())  # a^2 + b^2 - 2ab = (a - b)^2
         dist = dist.clamp(min=1e-12).sqrt()  # for numerical stability, [P, P]
 
-        # if self.use_hard_mining:
-        #     uncertainty = torch.load("./saved_file/uncertainty.pth").cuda()
-        #     dist = dist * uncertainty[index].unsqueeze(0)
-
         # For each anchor, find the hardest positive and negative
         mask = targets_new.expand(n, n).eq(targets_new.expand(n, n).t())
         dist_ap, dist_an = [], []
-        p_idx, n_idx = [], []
-        for i in range(n):
-            dist_ap.append(dist[i][mask[i]].max(dim=0)[0])
-            dist_an.append(dist[i][mask[i] == 0].min(dim=0)[0])
-            p_idx.append(dist[i][mask[i]].max(dim=0)[1])
-            n_idx.append(dist[i][mask[i] == 0].min(dim=0)[1])
-
-        dist_ap = torch.stack(dist_ap)  # [B]
-        dist_an = torch.stack(dist_an)  # [B]
-        p_idx = torch.stack(p_idx)
-        n_idx = torch.stack(n_idx)
-
-        # if self.use_IoU_loss:
-        #     clip_IoU = torch.clamp(IoU, self.IoU_loss_clip[0], self.IoU_loss_clip[1])    # [B, ]
-        #     dist_ap = dist_ap * (clip_IoU * clip_IoU[p_idx])
-        #     dist_an = dist_an * (clip_IoU * clip_IoU[n_idx])
-        #     dist_ap = dist_ap * clip_IoU.detach()
-        #     dist_an = dist_an * clip_IoU.detach()
-            
-        # Compute ranking hinge loss
-        y = torch.ones_like(dist_an)
-        loss = torch.tensor(0.).to(y.device)
-        loss_instance = self.ranking_loss(dist_an, dist_ap, y)
-    
-        # if self.use_hard_mining:
-        #     uncertainty = torch.load("./saved_file/uncertainty.pth").cuda()
-        #     loss_instance = loss_instance * uncertainty[index]
+        # p_idx, n_idx = [], []
         
-        loss_instance = loss_instance.mean()
-        loss += self.instance_weight * loss_instance
+        # 需要同时满足具有正样本和负样本
+        try:
+            for i in range(n):
+                dist_ap.append(dist[i][mask[i]].max(dim=0)[0])
+                dist_an.append(dist[i][mask[i] == 0].min(dim=0)[0])
+                # p_idx.append(dist[i][mask[i]].max(dim=0)[1])
+                # n_idx.append(dist[i][mask[i] == 0].min(dim=0)[1])
+
+            dist_ap = torch.stack(dist_ap)  # [B]
+            dist_an = torch.stack(dist_an)  # [B]
+            # p_idx = torch.stack(p_idx)
+            # n_idx = torch.stack(n_idx)
+
+            # Compute ranking hinge loss
+            y = torch.ones_like(dist_an)
+            loss_instance = self.ranking_loss(dist_an, dist_ap, y)
+            # loss_instance = loss_instance * target_label_mask
+            loss_instance = loss_instance.mean()
+            loss += self.instance_weight * loss_instance
+        except:
+            pass
 
         try:
             bg = torch.stack(bg)
             m = bg.size(0)
         except:
             m = 0
-
+            
         if m > 0:
             dist_p = torch.pow(inputs_new, 2).sum(dim=1, keepdim=True).expand(n, m)
             dist_bg = torch.pow(bg, 2).sum(dim=1, keepdim=True)
@@ -102,23 +100,20 @@ class Quaduplet2Loss(nn.Module):
             dist_new = dist_p + dist_bg.t()
             dist_new.addmm_(1, -2, inputs_new, bg.t())
             dist_new = dist_new.clamp(min=1e-12).sqrt()  # for numerical stability
-            # For each anchor, find the hardest positive and negative
-            # mask = targets_new.expand(n, ).eq(targets_new.expand(n, n).t())
 
             dist_ap, dist_an = [], []
-            for i in range(n):
-                dist_ap.append(dist[i].max())
-                dist_an.append(dist_new[i].min())
-            dist_ap = torch.stack(dist_ap)
-            dist_an = torch.stack(dist_an)
-            
-            y = torch.ones_like(dist_an)
-            loss_bg = self.ranking_loss(dist_an, dist_ap, y)
-            
-            # if self.use_hard_mining:
-            #     uncertainty = torch.load("./saved_file/uncertainty.pth").cuda()
-            #     loss_bg = loss_bg * uncertainty[index].detach()
-            
-            loss_bg = loss_bg.mean()
-            loss += self.bg_weight * loss_bg
+            try:
+                for i in range(n):
+                    dist_ap.append(dist[i].max())
+                    dist_an.append(dist_new[i].min())
+                dist_ap = torch.stack(dist_ap)
+                dist_an = torch.stack(dist_an)
+                
+                y = torch.ones_like(dist_an)
+                loss_bg = self.ranking_loss(dist_an, dist_ap, y)
+                # loss_bg = loss_bg * target_label_mask
+                loss_bg = loss_bg.mean()
+                loss += self.bg_weight * loss_bg
+            except:
+                pass
         return loss
