@@ -105,7 +105,7 @@ class ClusterHook(Hook):
                     if self.cfg.PSEUDO_LABELS.hard_mining.use_hard_mining:
                         pseudo_labels, label_mask = transfer_label_noise_to_outlier(uncertainty, pseudo_labels[0])
 
-                    label_mask = outlier_mask(pseudo_labels[0])
+                    # label_mask = outlier_mask(pseudo_labels[0])
                     # for iter in range(self.cfg.PSEUDO_LABELS.hard_mining.label_refine_iters):
                     #     print("iter", iter)
                     #     # pseudo_labels = label_refine_by_part(pseudo_labels[0], uncertainty)
@@ -118,7 +118,7 @@ class ClusterHook(Hook):
                     #     uncertainty = self.get_uncertainty_by_part(update_pseudo_labels, update_pseudo_label2s)
                     #     pseudo_labels = update_pseudo_labels
                     #     pseudo_label2s = update_pseudo_label2s
-                    torch.save(label_mask, os.path.join("saved_file", "label_mask.pth"))
+                    # torch.save(label_mask, os.path.join("saved_file", "label_mask.pth"))
                     torch.save(uncertainty, os.path.join("saved_file", "uncertainty.pth"))
 
             torch.save(pseudo_labels, os.path.join("saved_file", "pseudo_labels.pth"))

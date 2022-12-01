@@ -36,8 +36,8 @@ class Quaduplet2Loss(nn.Module):
         bg = []
         targets_new = []
         
-        label_mask = torch.load(os.path.join('saved_file', 'label_mask.pth')).cuda()    # [N, ]
-        target_label_mask = label_mask[index]
+        # label_mask = torch.load(os.path.join('saved_file', 'label_mask.pth')).cuda()    # [N, ]
+        # target_label_mask = label_mask[index]
         
         for i in range(len(targets)):
             if targets[i] < 0:

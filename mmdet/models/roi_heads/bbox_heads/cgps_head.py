@@ -66,6 +66,7 @@ class CGPSHead(nn.Module):
                  use_inter_loss=False,
                  use_mean_feat=False,
                  co_learning=False,
+                 eps=0.1,
                  co_learning_weight=0.5,
                  use_hard_mining=False,
                  global_weight=0.9,
@@ -97,7 +98,7 @@ class CGPSHead(nn.Module):
                                                         use_instance_hard_loss=use_instance_hard_loss, use_hybrid_loss=use_hybrid_loss, use_IoU_loss=use_IoU_loss, \
                                                         use_IoU_memory=use_IoU_memory, IoU_loss_clip=IoU_loss_clip, IoU_memory_clip=IoU_memory_clip, \
                                                         IoU_momentum=IoU_momentum, use_uncertainty_loss=use_uncertainty_loss, foreground_weight=foreground_weight,
-                                                        use_part_feat=use_part_feat, co_learning=co_learning, use_hard_mining=use_hard_mining)
+                                                        use_part_feat=use_part_feat, co_learning=co_learning, use_hard_mining=use_hard_mining, eps=eps)
         self.loss_triplet = Quaduplet2Loss(margin=margin, bg_weight=triplet_bg_weight, instance_weight=triplet_instance_weight, use_IoU_loss=use_IoU_loss, \
                                             IoU_loss_clip=IoU_loss_clip, use_uncertainty_loss=use_uncertainty_loss, use_hard_mining=use_hard_mining)
         self.loss_circle = CircleLoss(m=0.25, gamma=16)
@@ -373,11 +374,17 @@ class CGPSHead(nn.Module):
                 top_pos_bbox_pred[:, 1] = top_pos_bbox_pred[:, 1] / 2   # [x1, y1/2, x2, y2]
                 bottom_pos_bbox_pred = pos_bbox_pred.clone()
                 bottom_pos_bbox_pred[:, 3] = bottom_pos_bbox_pred[:, 3] / 2 # [x1, y1, x2, y2/2]
-
+                
                 pos_bbox_targets = bbox_targets[pos_inds.type(torch.bool)]
+                top_pos_bbox_targets = pos_bbox_targets.clone()
+                top_pos_bbox_targets[:, 1] = top_pos_bbox_targets[:, 1] / 2   # [x1, y1/2, x2, y2]  \
+                bottom_pos_bbox_targets = pos_bbox_targets.clone()
+                bottom_pos_bbox_targets[:, 3] = bottom_pos_bbox_targets[:, 3] / 2   # [x1, y1/2, x2, y2]  
+
+                # TODO part特征和全局特征 or par特征和part特征之间做IoU
                 IoU = torchvision.ops.box_iou(pos_bbox_pred, pos_bbox_targets)
-                top_IoU = torchvision.ops.box_iou(top_pos_bbox_pred, pos_bbox_targets)
-                bottom_IoU = torchvision.ops.box_iou(bottom_pos_bbox_pred, pos_bbox_targets)
+                top_IoU = torchvision.ops.box_iou(top_pos_bbox_pred, top_pos_bbox_targets)
+                bottom_IoU = torchvision.ops.box_iou(bottom_pos_bbox_pred, bottom_pos_bbox_targets)
 
                 dialog = torch.eye(IoU.shape[0]).bool().cuda()
                 IoU = IoU[dialog]
