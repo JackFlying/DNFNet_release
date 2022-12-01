@@ -123,4 +123,4 @@ jobs_bk
 ckps
 *tar
 
-/jobs
+/jobs/*/work_dirs/*/epoch_*.pth

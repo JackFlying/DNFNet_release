@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=3 python -u ../../tools/test_personsearch.py "./work_dirs/cuhk/cuhk.py"   './work_dirs/cuhk/epoch_25.pth' --eval bbox >>result25.txt 2>&1
