@@ -176,7 +176,7 @@ class ReidRoIHead(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
         part_feats, part_feats1, RoI_Align_feat = None, None, None
 
         bbox_feats = self.bbox_roi_extractor(
-            x[:self.bbox_roi_extractor.num_inputs], rois)   # [N, 1024, 14, 14], [14, 14]表示[width, height]
+            x[:self.bbox_roi_extractor.num_inputs], rois)   # [N, 1024, 14, 14], [14, 14]表示[height, width]
         bbox_feats1 = F.adaptive_max_pool2d(bbox_feats, 1).squeeze(-1).squeeze(-1)  # [N, 1024, 1, 1]
 
         if self.use_part_feat:

@@ -371,25 +371,31 @@ class CGPSHead(nn.Module):
                 cls_score_sf = cls_score_sf[:, 0]
 
                 top_pos_bbox_pred = pos_bbox_pred.clone()   # [x1, y1, x2, y2]
-                top_pos_bbox_pred[:, 1] = top_pos_bbox_pred[:, 1] / 2   # [x1, y1/2, x2, y2]
+                top_pos_bbox_pred[:, 3] = top_pos_bbox_pred[:, 3] / 2   # [x1, y1, x2, y2/2]
                 bottom_pos_bbox_pred = pos_bbox_pred.clone()
-                bottom_pos_bbox_pred[:, 3] = bottom_pos_bbox_pred[:, 3] / 2 # [x1, y1, x2, y2/2]
+                bottom_pos_bbox_pred[:, 1] = bottom_pos_bbox_pred[:, 1] / 2 # [x1, y1/2, x2, y2]
                 
                 pos_bbox_targets = bbox_targets[pos_inds.type(torch.bool)]
                 top_pos_bbox_targets = pos_bbox_targets.clone()
-                top_pos_bbox_targets[:, 1] = top_pos_bbox_targets[:, 1] / 2   # [x1, y1/2, x2, y2]  \
+                top_pos_bbox_targets[:, 3] = top_pos_bbox_targets[:, 3] / 2   # [x1, y1, x2, y2/2]
                 bottom_pos_bbox_targets = pos_bbox_targets.clone()
-                bottom_pos_bbox_targets[:, 3] = bottom_pos_bbox_targets[:, 3] / 2   # [x1, y1/2, x2, y2]  
+                bottom_pos_bbox_targets[:, 1] = bottom_pos_bbox_targets[:, 1] / 2   # [x1, y1/2, x2, y2]
 
-                # TODO part特征和全局特征 or par特征和part特征之间做IoU
                 IoU = torchvision.ops.box_iou(pos_bbox_pred, pos_bbox_targets)
                 top_IoU = torchvision.ops.box_iou(top_pos_bbox_pred, top_pos_bbox_targets)
                 bottom_IoU = torchvision.ops.box_iou(bottom_pos_bbox_pred, bottom_pos_bbox_targets)
+                
+                # for a, b, c in zip(pos_bbox_targets, top_pos_bbox_targets, bottom_pos_bbox_targets):
+                #     print(a, b, c)
 
                 dialog = torch.eye(IoU.shape[0]).bool().cuda()
                 IoU = IoU[dialog]
                 top_IoU = top_IoU[dialog]
                 bottom_IoU = bottom_IoU[dialog]
+
+                # for a, b, c in zip(IoU, top_IoU, bottom_IoU):
+                #     print(a.item(), b.item(), c.item())
+                
             else:
                 losses['loss_bbox'] = bbox_pred.sum() * 0
                 IoU = torch.zeros(0).cuda()

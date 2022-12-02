@@ -69,7 +69,7 @@ class HM_part(autograd.Function):
             # ctx.features[y] = (1 - iou) * ctx.features[y] + iou * x
             # ctx.bottom_features[y] = ctx.momentum * ctx.bottom_features[y] + (1.0 - ctx.momentum) * b
             # ctx.top_features[y] = ctx.momentum * ctx.top_features[y] + (1.0 - ctx.momentum) * t
-            
+
             # 2. 
             # ctx.features[y] = (1 - iou) * ctx.features[y] + iou * x
             # ctx.bottom_features[y] = (1 - iou) * ctx.bottom_features[y] + iou * b
