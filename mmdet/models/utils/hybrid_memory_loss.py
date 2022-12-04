@@ -15,8 +15,8 @@ from mmdet.utils import all_gather_tensor
 import sys
 import numpy as np
 sys.path.append("/home/linhuadong/DNFNet/mmdet/models/utils")
-import min_search_cuda
-import max_search_cuda
+# import min_search_cuda
+# import max_search_cuda
 from torch.cuda.amp import custom_fwd, custom_bwd
 
 class HM_part(autograd.Function):
@@ -282,100 +282,100 @@ class HybridMemoryMultiFocalPercent(nn.Module):
         masked_sums = masked_exps.sum(dim, keepdim=True) + epsilon
         return masked_exps / masked_sums    # softmax
 
-    def get_all_hard_instance_loss(self, inputs, labels, targets, epsilon=1e-6):
-        B = inputs.size(0)
-        num_classes = labels.max() + 1
-        cluster_idxs = []
-        for lb in range(num_classes):
-            c_idx = torch.nonzero((labels == lb)).view(-1).tolist()
-            cluster_idxs.append(c_idx)
-        min_idx = min_search_cuda.min_negative_search(inputs.cpu().detach().numpy(), cluster_idxs)
-        max_idx = max_search_cuda.max_positive_search(inputs.cpu().detach().numpy(), targets.tolist(), cluster_idxs)
+    # def get_all_hard_instance_loss(self, inputs, labels, targets, epsilon=1e-6):
+    #     B = inputs.size(0)
+    #     num_classes = labels.max() + 1
+    #     cluster_idxs = []
+    #     for lb in range(num_classes):
+    #         c_idx = torch.nonzero((labels == lb)).view(-1).tolist()
+    #         cluster_idxs.append(c_idx)
+    #     min_idx = min_search_cuda.min_negative_search(inputs.cpu().detach().numpy(), cluster_idxs)
+    #     max_idx = max_search_cuda.max_positive_search(inputs.cpu().detach().numpy(), targets.tolist(), cluster_idxs)
 
-        one_hot_pos = torch.nn.functional.one_hot(targets, num_classes=num_classes)
-        one_hot_neg = one_hot_pos.new_ones(size=one_hot_pos.shape)  # 返回一个与size大小相同的用1填充的张量
-        one_hot_neg = one_hot_neg - one_hot_pos
+    #     one_hot_pos = torch.nn.functional.one_hot(targets, num_classes=num_classes)
+    #     one_hot_neg = one_hot_pos.new_ones(size=one_hot_pos.shape)  # 返回一个与size大小相同的用1填充的张量
+    #     one_hot_neg = one_hot_neg - one_hot_pos
 
-        sim = torch.zeros((B, num_classes)).cuda()
-        min_idx1 = torch.arange(min_idx.shape[0]).repeat(min_idx.shape[1], 1).transpose(0, 1).contiguous().view(-1)
-        min_idx2 = torch.tensor(min_idx).view(-1).long()
-        sim = inputs[min_idx1, min_idx2].reshape(B, num_classes)
-        sim[one_hot_neg > 0] = inputs[min_idx1, min_idx2].reshape(B, num_classes)[one_hot_neg > 0]
+    #     sim = torch.zeros((B, num_classes)).cuda()
+    #     min_idx1 = torch.arange(min_idx.shape[0]).repeat(min_idx.shape[1], 1).transpose(0, 1).contiguous().view(-1)
+    #     min_idx2 = torch.tensor(min_idx).view(-1).long()
+    #     sim = inputs[min_idx1, min_idx2].reshape(B, num_classes)
+    #     sim[one_hot_neg > 0] = inputs[min_idx1, min_idx2].reshape(B, num_classes)[one_hot_neg > 0]
 
-        max_idx1 = torch.arange(max_idx.shape[0]).repeat(max_idx.shape[1], 1).transpose(0, 1).contiguous().view(-1)
-        max_idx2 = torch.tensor(max_idx).view(-1).long()
-        sim[one_hot_pos > 0] = inputs[max_idx1, max_idx2].reshape(B)
+    #     max_idx1 = torch.arange(max_idx.shape[0]).repeat(max_idx.shape[1], 1).transpose(0, 1).contiguous().view(-1)
+    #     max_idx2 = torch.tensor(max_idx).view(-1).long()
+    #     sim[one_hot_pos > 0] = inputs[max_idx1, max_idx2].reshape(B)
     
-        sim_exp = torch.exp(sim).clone()
-        neg_exps = sim_exp.new_zeros(size=sim_exp.shape)
-        neg_exps[one_hot_neg > 0] = sim_exp[one_hot_neg > 0]
+    #     sim_exp = torch.exp(sim).clone()
+    #     neg_exps = sim_exp.new_zeros(size=sim_exp.shape)
+    #     neg_exps[one_hot_neg > 0] = sim_exp[one_hot_neg > 0]
 
-        # hardmining
-        ori_neg_exps = neg_exps
-        neg_exps = neg_exps / neg_exps.sum(dim=1, keepdim=True)
+    #     # hardmining
+    #     ori_neg_exps = neg_exps
+    #     neg_exps = neg_exps / neg_exps.sum(dim=1, keepdim=True)
 
-        sorted, indices = torch.sort(neg_exps, dim=1, descending=True)  # 排序得到相似度最大(难度最大)的负样本
-        sorted_cum_sum = torch.cumsum(sorted, dim=1)
-        sorted_cum_diff = (sorted_cum_sum - self.instance_top_percent).abs()
-        sorted_cum_min_indices = sorted_cum_diff.argmin(dim=1)  # 获得K的大小
-        min_values = sorted[torch.range(0, sorted.shape[0] - 1).long(), sorted_cum_min_indices]   # 获取K对应的val
-        min_values = min_values.unsqueeze(dim=-1) * ori_neg_exps.sum(dim=1, keepdim=True)   # 前面除neg_exps.sum(),所以这里乘回去
-        ori_neg_exps[ori_neg_exps < min_values] = 0   # 小于阈值,即难度稍微小的负样本不考虑
+    #     sorted, indices = torch.sort(neg_exps, dim=1, descending=True)  # 排序得到相似度最大(难度最大)的负样本
+    #     sorted_cum_sum = torch.cumsum(sorted, dim=1)
+    #     sorted_cum_diff = (sorted_cum_sum - self.instance_top_percent).abs()
+    #     sorted_cum_min_indices = sorted_cum_diff.argmin(dim=1)  # 获得K的大小
+    #     min_values = sorted[torch.range(0, sorted.shape[0] - 1).long(), sorted_cum_min_indices]   # 获取K对应的val
+    #     min_values = min_values.unsqueeze(dim=-1) * ori_neg_exps.sum(dim=1, keepdim=True)   # 前面除neg_exps.sum(),所以这里乘回去
+    #     ori_neg_exps[ori_neg_exps < min_values] = 0   # 小于阈值,即难度稍微小的负样本不考虑
 
-        sim_exp[one_hot_neg > 0] = ori_neg_exps[one_hot_neg > 0]
-        sim_sum = sim_exp.sum(dim=-1, keepdim=True) + epsilon
-        sim_sum_softmax = sim_exp / sim_sum
-        instance_hard_loss = F.nll_loss(torch.log(sim_sum_softmax + epsilon), targets)
-        return instance_hard_loss
+    #     sim_exp[one_hot_neg > 0] = ori_neg_exps[one_hot_neg > 0]
+    #     sim_sum = sim_exp.sum(dim=-1, keepdim=True) + epsilon
+    #     sim_sum_softmax = sim_exp / sim_sum
+    #     instance_hard_loss = F.nll_loss(torch.log(sim_sum_softmax + epsilon), targets)
+    #     return instance_hard_loss
 
-    def get_hybrid_loss(self, inputs, labels, targets, vec, mask, epsilon=1e-6):
-        """
-            以所在簇的聚类中心为正样本,其它簇的最难样本为负样本
-        """
+    # def get_hybrid_loss(self, inputs, labels, targets, vec, mask, epsilon=1e-6):
+    #     """
+    #         以所在簇的聚类中心为正样本,其它簇的最难样本为负样本
+    #     """
 
-        exps = torch.exp(vec)
-        cluster_exps = exps * mask.float().clone()
+    #     exps = torch.exp(vec)
+    #     cluster_exps = exps * mask.float().clone()
 
-        B = inputs.size(0)
-        num_classes = labels.max() + 1
-        cluster_idxs = []
-        for lb in range(num_classes):
-            c_idx = torch.nonzero((labels == lb)).view(-1).tolist()
-            cluster_idxs.append(c_idx)
-        min_idx = min_search_cuda.min_negative_search(inputs.cpu().detach().numpy(), cluster_idxs)
+    #     B = inputs.size(0)
+    #     num_classes = labels.max() + 1
+    #     cluster_idxs = []
+    #     for lb in range(num_classes):
+    #         c_idx = torch.nonzero((labels == lb)).view(-1).tolist()
+    #         cluster_idxs.append(c_idx)
+    #     min_idx = min_search_cuda.min_negative_search(inputs.cpu().detach().numpy(), cluster_idxs)
 
-        one_hot_pos = torch.nn.functional.one_hot(targets, num_classes=num_classes)
-        one_hot_neg = one_hot_pos.new_ones(size=one_hot_pos.shape)  # 返回一个与size大小相同的用1填充的张量
-        one_hot_neg = one_hot_neg - one_hot_pos
+    #     one_hot_pos = torch.nn.functional.one_hot(targets, num_classes=num_classes)
+    #     one_hot_neg = one_hot_pos.new_ones(size=one_hot_pos.shape)  # 返回一个与size大小相同的用1填充的张量
+    #     one_hot_neg = one_hot_neg - one_hot_pos
 
-        sim = torch.zeros((B, num_classes)).cuda()
-        min_idx1 = torch.arange(min_idx.shape[0]).repeat(min_idx.shape[1], 1).transpose(0, 1).contiguous().view(-1)
-        min_idx2 = torch.tensor(min_idx).view(-1).long()
-        sim[one_hot_neg > 0] = inputs[min_idx1, min_idx2].reshape(B, num_classes)[one_hot_neg > 0]
+    #     sim = torch.zeros((B, num_classes)).cuda()
+    #     min_idx1 = torch.arange(min_idx.shape[0]).repeat(min_idx.shape[1], 1).transpose(0, 1).contiguous().view(-1)
+    #     min_idx2 = torch.tensor(min_idx).view(-1).long()
+    #     sim[one_hot_neg > 0] = inputs[min_idx1, min_idx2].reshape(B, num_classes)[one_hot_neg > 0]
 
-        sim_exp = torch.exp(sim).clone()
-        sim_exp[one_hot_pos > 0] = cluster_exps[one_hot_pos > 0]
+    #     sim_exp = torch.exp(sim).clone()
+    #     sim_exp[one_hot_pos > 0] = cluster_exps[one_hot_pos > 0]
 
-        neg_exps = sim_exp.new_zeros(size=sim_exp.shape)
-        neg_exps[one_hot_neg > 0] = sim_exp[one_hot_neg > 0]
+    #     neg_exps = sim_exp.new_zeros(size=sim_exp.shape)
+    #     neg_exps[one_hot_neg > 0] = sim_exp[one_hot_neg > 0]
 
-        # hardmining
-        ori_neg_exps = neg_exps
-        neg_exps = neg_exps / neg_exps.sum(dim=1, keepdim=True)
+    #     # hardmining
+    #     ori_neg_exps = neg_exps
+    #     neg_exps = neg_exps / neg_exps.sum(dim=1, keepdim=True)
 
-        sorted, indices = torch.sort(neg_exps, dim=1, descending=True)  # 排序得到相似度最大(难度最大)的负样本
-        sorted_cum_sum = torch.cumsum(sorted, dim=1)
-        sorted_cum_diff = (sorted_cum_sum - self.instance_top_percent).abs()
-        sorted_cum_min_indices = sorted_cum_diff.argmin(dim=1)  # 获得K的大小
-        min_values = sorted[torch.range(0, sorted.shape[0] - 1).long(), sorted_cum_min_indices]   # 获取K对应的val
-        min_values = min_values.unsqueeze(dim=-1) * ori_neg_exps.sum(dim=1, keepdim=True)   # 前面除neg_exps.sum(),所以这里乘回去
-        ori_neg_exps[ori_neg_exps < min_values] = 0   # 小于阈值,即难度稍微小的负样本不考虑
+    #     sorted, indices = torch.sort(neg_exps, dim=1, descending=True)  # 排序得到相似度最大(难度最大)的负样本
+    #     sorted_cum_sum = torch.cumsum(sorted, dim=1)
+    #     sorted_cum_diff = (sorted_cum_sum - self.instance_top_percent).abs()
+    #     sorted_cum_min_indices = sorted_cum_diff.argmin(dim=1)  # 获得K的大小
+    #     min_values = sorted[torch.range(0, sorted.shape[0] - 1).long(), sorted_cum_min_indices]   # 获取K对应的val
+    #     min_values = min_values.unsqueeze(dim=-1) * ori_neg_exps.sum(dim=1, keepdim=True)   # 前面除neg_exps.sum(),所以这里乘回去
+    #     ori_neg_exps[ori_neg_exps < min_values] = 0   # 小于阈值,即难度稍微小的负样本不考虑
 
-        sim_exp[one_hot_neg > 0] = ori_neg_exps[one_hot_neg > 0]
-        sim_sum = sim_exp.sum(dim=-1, keepdim=True) + epsilon
-        sim_sum_softmax = sim_exp / sim_sum
-        hybrid_loss = F.nll_loss(torch.log(sim_sum_softmax + epsilon), targets)
-        return hybrid_loss
+    #     sim_exp[one_hot_neg > 0] = ori_neg_exps[one_hot_neg > 0]
+    #     sim_sum = sim_exp.sum(dim=-1, keepdim=True) + epsilon
+    #     sim_sum_softmax = sim_exp / sim_sum
+    #     hybrid_loss = F.nll_loss(torch.log(sim_sum_softmax + epsilon), targets)
+    #     return hybrid_loss
 
     def get_hard_cluster_loss(self, labels, cluster_inputs, targets, IoU, indexes):
         """
