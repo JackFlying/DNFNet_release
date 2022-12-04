@@ -130,7 +130,9 @@ class BaseRoIHead(nn.Module, metaclass=ABCMeta):
                  shared_head=None,
                  train_cfg=None,
                  test_cfg=None,
-                 use_gfn=False):
+                 use_gfn=False,
+                 use_RoI_Align_feat=False,
+                 use_part_feat=True):
         super(BaseRoIHead, self).__init__()
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
@@ -146,6 +148,8 @@ class BaseRoIHead(nn.Module, metaclass=ABCMeta):
         self.init_assigner_sampler()
 
         self.use_gfn = use_gfn
+        self.use_RoI_Align_feat = use_RoI_Align_feat
+        self.use_part_feat = use_part_feat
         # self.use_global_Local_context = False
         # self.sampler_num = None
         # self.cxt_feat_len = 1024

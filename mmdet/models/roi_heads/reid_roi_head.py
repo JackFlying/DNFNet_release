@@ -171,8 +171,6 @@ class ReidRoIHead(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
 
     def _bbox_forward(self, x, rois, labels=None, test=False):
         """Box head forward function used in both training and testing."""
-        self.use_RoI_Align_feat = False
-        self.use_part_feat = True
         part_feats, part_feats1, RoI_Align_feat = None, None, None
         bbox_feats = self.bbox_roi_extractor(x[:self.bbox_roi_extractor.num_inputs], rois)   # [N, 1024, 14, 14], [14, 14]表示[height, width]
         bbox_feats1 = F.adaptive_max_pool2d(bbox_feats, 1).squeeze(-1).squeeze(-1)  # [N, 1024, 1, 1]
@@ -203,7 +201,7 @@ class ReidRoIHead(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
             gfn_losses = self.bbox_head.gfn_forward(scene_emb, id_pred, labels)
 
         bbox_results = dict(cls_score=cls_score, bbox_pred=bbox_pred, bbox_feats=bbox_feats, id_pred=id_pred, \
-                            RoI_Align_feat=RoI_Align_feat, part_id_pred=part_id_pred, gfn_losses=gfn_losses)
+                            RoI_Align_feat=RoI_Align_feat, part_id_pred=part_id_pred, scene_emb=scene_emb, gfn_losses=gfn_losses)
         # else:
         #     bbox_feats = bbox_feats.squeeze(-1).squeeze(-1)
         #     bbox_pred = self.fc_reg(bbox_feats) # [N, 4]
@@ -367,6 +365,7 @@ class ReidRoIHead(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
         id_pred = bbox_results['id_pred']
         RoI_Align_feat = bbox_results['RoI_Align_feat']
         part_id_pred = bbox_results['part_id_pred']
+        scene_emb = bbox_results['scene_emb']
 
         num_proposals_per_img = tuple(len(p) for p in proposals)
         rois = rois.split(num_proposals_per_img, 0)
@@ -374,6 +373,11 @@ class ReidRoIHead(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
         # some detector with_reg is False, bbox_pred will be None
         bbox_pred = bbox_pred.split(num_proposals_per_img,0) if bbox_pred is not None else [None, None]
         id_pred = id_pred.split(num_proposals_per_img, 0)
+        
+        # print("num_proposals_per_img", num_proposals_per_img)
+        # if scene_emb is not None:
+        #     scene_emb = scene_emb.split(num_proposals_per_img, 0)
+        scene_emb = scene_emb.repeat(num_proposals_per_img[0], 1)
         
         if RoI_Align_feat is not None:
             RoI_Align_feat = RoI_Align_feat.split(num_proposals_per_img, 0)
@@ -407,50 +411,17 @@ class ReidRoIHead(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
                 det_labels.append(det_label)
         else:
             for i in range(len(proposals)):
-                if crop_feats is None and RoI_Align_feat is None and part_id_pred is None:
-                    det_bbox, det_label = self.bbox_head.get_bboxes(
-                        rois[i],
-                        cls_score[i],
-                        bbox_pred[i],
-                        id_pred[i],
-                        None,
-                        img_shapes[i],
-                        scale_factors[i],
-                        rescale=rescale,
-                        cfg=rcnn_test_cfg)
-                elif crop_feats is None and part_id_pred is not None:
-                    det_bbox, det_label = self.bbox_head.get_bboxes(
-                        rois[i],
-                        cls_score[i],
-                        bbox_pred[i],
-                        id_pred[i],
-                        part_id_pred[i],
-                        img_shapes[i],
-                        scale_factors[i],
-                        rescale=rescale,
-                        cfg=rcnn_test_cfg)
-                elif crop_feats is None and RoI_Align_feat is not None:
-                    det_bbox, det_label = self.bbox_head.get_bboxes(
-                        rois[i],
-                        cls_score[i],
-                        bbox_pred[i],
-                        id_pred[i], # [256]
-                        RoI_Align_feat[i].view(RoI_Align_feat[i].shape[0], -1),  # [2048, 7, 7]
-                        img_shapes[i],
-                        scale_factors[i],
-                        rescale=rescale,
-                        cfg=rcnn_test_cfg)
-                elif crop_feats is not None:
-                    det_bbox, det_label = self.bbox_head.get_bboxes(
-                        rois[i],
-                        cls_score[i],
-                        bbox_pred[i],
-                        id_pred[i],
-                        crop_feats[i],
-                        img_shapes[i],
-                        scale_factors[i],
-                        rescale=rescale,
-                        cfg=rcnn_test_cfg)
+                det_bbox, det_label = self.bbox_head.get_bboxes(
+                    rois[i],
+                    cls_score[i],
+                    bbox_pred[i],
+                    id_pred[i],
+                    # RoI_Align_feat[i].view(RoI_Align_feat[i].shape[0], -1),  # [2048, 7, 7]
+                    torch.cat([part_id_pred[i], scene_emb], dim=1),
+                    img_shapes[i],
+                    scale_factors[i],
+                    rescale=rescale,
+                    cfg=rcnn_test_cfg)
                 
                 det_bboxes.append(det_bbox)
                 det_labels.append(det_label)

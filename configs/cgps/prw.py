@@ -9,9 +9,12 @@ GLOBAL_WEIGHT = 0.9
 CO_LEARNING = False
 UNCERTAINTY = True
 HARD_MINING = True
+USE_GFN = True
 model = dict(
     roi_head=dict(
-        use_gfn=False,
+        use_gfn=USE_GFN,
+        use_RoI_Align_feat=False,
+        use_part_feat=USE_PART_FEAT,
         bbox_head=dict(
             testing=TEST,
             type='CGPSHead',
@@ -43,7 +46,7 @@ model = dict(
             loss_bbox=dict(type='L1Loss', loss_weight=1),
             loss_reid=dict(loss_weight=1.0),
             gfn_config=dict(
-                use_gfn=True,
+                use_gfn=USE_GFN,
                 gfn_mode='image',    # {'image', 'separate', 'combined'}
                 gfn_activation_mode='se',   # combined:{'se', 'sum', 'identity'}
                 gfn_filter_neg=True,
@@ -166,11 +169,11 @@ PSEUDO_LABELS = dict(
     k2=6, # for jaccard distance
     search_type=0, # 0,1,2 for GPU, 3 for CPU (work for faiss)
     cluster_num=None,
-    iters=1,    # 1
-    LAMBDA_SIM1=0.0,    # 0.5
-    LAMBDA_SIM2=0.1,
-    context_method='zero',   # sum, max, img, max+
-    context_clip=True,
+    iters=0,    # 1
+    lambda_scene=0.1,   # 调成0,即zero初始化
+    lambda_person=0.1,
+    context_method='scene',
+    # context_clip=False,
     threshold=0.5,
     use_post_process=False,
     filter_threshold=0.2,
@@ -178,6 +181,7 @@ PSEUDO_LABELS = dict(
     use_k_reciprocal_nearest=False,
     part_feat=dict(use_part_feat=USE_PART_FEAT, 
                     global_weight=GLOBAL_WEIGHT,
+                    part_weight=(1 - GLOBAL_WEIGHT)/2,
                     uncertainty=UNCERTAINTY,
                     ),
     hard_mining=dict(use_hard_mining=HARD_MINING,

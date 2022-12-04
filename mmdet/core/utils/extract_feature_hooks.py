@@ -43,6 +43,7 @@ class ExtractFeatureHook(Hook):
         self.alliance_clustering = False
         self.uncertainty_estimation = False
         self.use_part_feats = cfg.USE_PART_FEAT
+        self.use_gfn = cfg.USE_GFN
         
     
     def before_run(self, runner):
@@ -165,29 +166,30 @@ class ExtractFeatureHook(Hook):
                 
             new_data = {'proposals':data['gt_bboxes'], 'img': data['img'], 'img_metas': data['img_metas'], 'use_crop':False}
             result = model(return_loss=False, rescale=False, **new_data)
-            if self.alliance_clustering or self.uncertainty_estimation:
-                reid_features1 = torch.from_numpy(result[0][0][:, 5:5+256])
-                reid_features2 = torch.from_numpy(result[0][0][:, 5+256:5+2*256])
-                reid_features = torch.cat([reid_features1, reid_features2], dim=0)
-            else:
-                reid_features = torch.from_numpy(result[0][0][:, 5:5+256])
-                if self.use_part_feats:
-                    bottom_feats = torch.from_numpy(result[0][0][:, 5+256:5+256+256])
-                    top_feats = torch.from_numpy(result[0][0][:, 5+256+256:5+256+256*2])
+            reid_features = torch.from_numpy(result[0][0][:, 5:5+256])
+            if self.use_part_feats:
+                bottom_feats = torch.from_numpy(result[0][0][:, 5+256:5+2*256])
+                top_feats = torch.from_numpy(result[0][0][:, 5+2*256:5+3*256])
+                scene_feats = torch.from_numpy(result[0][0][:, 5+3*256:5+3*256+2048])
 
             if normalize:
                 reid_features = F.normalize(reid_features, p=2, dim=-1)
                 if self.use_part_feats:
                     bottom_feats = F.normalize(bottom_feats, p=2, dim=-1)
                     top_feats = F.normalize(top_feats, p=2, dim=-1)
+                if self.use_gfn:
+                    scene_feats = F.normalize(scene_feats, p=2, dim=-1)
 
             if features is None:
                 if self.alliance_clustering or self.uncertainty_estimation:
                     features = torch.zeros(2 * dataset.id_num, reid_features.shape[1])
                 else:
                     features = torch.zeros(dataset.id_num, reid_features.shape[1])
-                    bottom_features = torch.zeros(dataset.id_num, reid_features.shape[1])
-                    top_features = torch.zeros(dataset.id_num, reid_features.shape[1])
+                    if self.use_part_feats:
+                        bottom_features = torch.zeros(dataset.id_num, bottom_feats.shape[1])
+                        top_features = torch.zeros(dataset.id_num, top_feats.shape[1])
+                    if self.use_gfn:
+                        scene_features = torch.zeros(dataset.id_num, scene_feats.shape[1])
 
             #align gt box and predicted box
             result_boxes = torch.from_numpy(result[0][0][:, :4])
@@ -217,6 +219,9 @@ class ExtractFeatureHook(Hook):
             if self.use_part_feats:
                 bottom_features[gt_ids] = bottom_feats
                 top_features[gt_ids] = top_feats
+            if self.use_gfn:
+                scene_features[gt_ids] = scene_feats
+                
             prog_bar.update()
 
         #restore model status
@@ -237,6 +242,7 @@ class ExtractFeatureHook(Hook):
         if self.use_part_feats:
             torch.save(bottom_features, os.path.join("saved_file", "bottom_features.pth"))
             torch.save(top_features, os.path.join("saved_file", "top_features.pth"))
+            torch.save(top_features, os.path.join("saved_file", "scene_features.pth"))
 
         if is_dist and cuda:
             # distributed: gather features from all GPUs

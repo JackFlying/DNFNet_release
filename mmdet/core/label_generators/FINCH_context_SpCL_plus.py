@@ -297,23 +297,27 @@ def get_img_sim_by_mean(inst_sim_matrix, split_num, threshold):
     img2img_sim = torch.stack(img2img_sim, dim=0)
     return img2img_sim
 
-def get_hybrid_sim(inst_sim_matrix, img_sim, split_num, lambda_sim):
-    """
-        将上下文相似度加到视觉相似度上面
-        1. 将上下文相似度维度进行扩充满足视觉相似度
-        2. 计算最近邻
-    """
+def get_extend_sim_matrix(sim, split_num):
     inst2img_sim = []
     for i in range(len(split_num)):
-        inst2img_sim.append(img_sim[:, i:i+1].repeat(1, split_num[i]))
+        inst2img_sim.append(sim[:, i:i+1].repeat(1, split_num[i]))
     inst2img_sim = torch.cat(inst2img_sim, dim=-1)    # [img_len, inst_len]
     
     img2img_sim_extend = []
     for i in range(len(split_num)):
         img2img_sim_extend.append(inst2img_sim[i:i+1, :].repeat(split_num[i], 1))
     img2img_sim_extend = torch.cat(img2img_sim_extend, dim=0)
-    
-    hybrid_sim_matrix = inst_sim_matrix + lambda_sim * img2img_sim_extend
+    return img2img_sim_extend
+
+def get_hybrid_sim(inst_sim_matrix, split_num, person_sim, scene_sim, lambda_person, lambda_scene):
+    """
+        将上下文相似度加到视觉相似度上面
+        1. 将上下文相似度维度进行扩充满足视觉相似度
+        2. 计算最近邻
+    """
+    person_sim_extend = get_extend_sim_matrix(person_sim, split_num)
+    scene_sim_extend = get_extend_sim_matrix(scene_sim, split_num)
+    hybrid_sim_matrix = inst_sim_matrix + lambda_person * person_sim_extend + lambda_scene * scene_sim_extend
     # 将对角线位置填充为负无穷大,自身不能作为最近邻
     hybrid_sim_matrix_ = hybrid_sim_matrix.clone()
     hybrid_sim_matrix_ = hybrid_sim_matrix_.fill_diagonal_(-100.)
@@ -429,33 +433,37 @@ def label_generator_FINCH_context_SpCL_Plus(cfg, features, cuda=True, indep_thre
         print("-------------------------part based clustering---------------------------------")
         bottom_features = torch.load("./saved_file/bottom_features.pth")
         top_features = torch.load("./saved_file/top_features.pth")
-        global_weight = cfg.PSEUDO_LABELS.part_feat.global_weight
         bottom_feat_sim = bottom_features.mm(bottom_features.t())
         top_feat_sim = top_features.mm(top_features.t())
-        instance_sim = global_weight * instance_sim +  (1 - global_weight) / 2 * bottom_feat_sim + (1 - global_weight) / 2 * top_feat_sim
-        
+        part_feat_sim = bottom_feat_sim + top_feat_sim
+        instance_sim = cfg.PSEUDO_LABELS.part_feat.global_weight * instance_sim + cfg.PSEUDO_LABELS.part_feat.part_weight * part_feat_sim
+    
+    person_sim = torch.zeros(len(unique_inds), len(unique_inds))
     if cfg.PSEUDO_LABELS.context_method == "max":
         img_sim = get_img_sim_by_max(instance_sim, split_num)
     elif cfg.PSEUDO_LABELS.context_method == "mean":
         img_sim = get_img_sim_by_mean(instance_sim, split_num, cfg.PSEUDO_LABELS.threshold)
     elif cfg.PSEUDO_LABELS.context_method == "zero":
         img_sim = torch.zeros(len(unique_inds), len(unique_inds))
+    elif cfg.PSEUDO_LABELS.context_method == "scene":
+        scene_features = torch.load("./saved_file/scene_features.pth")
+        scene_sim = scene_features.mm(scene_features.t())
 
     if cfg.PSEUDO_LABELS.context_clip:
-        img_sim = img_sim * (img_sim > cfg.PSEUDO_LABELS.threshold)
+        scene_sim = scene_sim * (scene_sim > cfg.PSEUDO_LABELS.threshold)
     
-    hybrid_instance_sim, initial_rank = get_hybrid_sim(instance_sim, img_sim, split_num, cfg.PSEUDO_LABELS.LAMBDA_SIM1)
+    hybrid_instance_sim, initial_rank = get_hybrid_sim(instance_sim, split_num, person_sim, scene_sim, 0, cfg.PSEUDO_LABELS.lambda_scene)
     if cfg.PSEUDO_LABELS.SpCL:
         labels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, features, initial_rank, cuda, indep_thres, all_inds, **kwargs)
     else:
         labels, centers, num_classes = label_generator_FINCH_context_single(0, features, initial_rank, all_inds=all_inds)
-    if cfg.PSEUDO_LABELS.use_post_process:
-        labels, centers, num_classes = post_process(cfg, labels, hybrid_instance_sim, features)
+    # if cfg.PSEUDO_LABELS.use_post_process:
+    #     labels, centers, num_classes = post_process(cfg, labels, hybrid_instance_sim, features)
 
     for i in range(cfg.PSEUDO_LABELS.iters):
         print("clustering iteration: {}".format(i + 1))
         unique_labels = set(labels.cpu().numpy())
-        img_sim = torch.zeros(len(unique_inds), len(unique_inds))
+        person_sim = torch.zeros(len(unique_inds), len(unique_inds))
         for label in unique_labels:
             b = (labels == label)
             tmp_id = b.nonzero()
@@ -463,16 +471,15 @@ def label_generator_FINCH_context_SpCL_Plus(cfg, features, cuda=True, indep_thre
             if len(img_ids) > 1:
                 for i in range(len(img_ids)):
                     for j in range(0, i, 1):
-                        img_sim[img_ids[i].item()][img_ids[j].item()] += instance_sim[tmp_id[i].item()][tmp_id[j].item()]
-                        img_sim[img_ids[j].item()][img_ids[i].item()] += instance_sim[tmp_id[j].item()][tmp_id[i].item()]
-        hybrid_instance_sim, initial_rank = get_hybrid_sim(instance_sim, img_sim, split_num, cfg.PSEUDO_LABELS.LAMBDA_SIM2)
-
+                        person_sim[img_ids[i].item()][img_ids[j].item()] += instance_sim[tmp_id[i].item()][tmp_id[j].item()]
+                        person_sim[img_ids[j].item()][img_ids[i].item()] += instance_sim[tmp_id[j].item()][tmp_id[i].item()]
+        hybrid_instance_sim, initial_rank = get_hybrid_sim(instance_sim, split_num, person_sim, scene_sim, cfg.PSEUDO_LABELS.lambda_person, cfg.PSEUDO_LABELS.lambda_scene)
         if cfg.PSEUDO_LABELS.SpCL:
             labels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, features, initial_rank, cuda, indep_thres, all_inds, **kwargs)
         else:
             labels, centers, num_classes = label_generator_FINCH_context_single(0, features, initial_rank, all_inds=all_inds)
-        if cfg.PSEUDO_LABELS.use_post_process:
-            labels, centers, num_classes = post_process(cfg, labels, hybrid_instance_sim, features)
+        # if cfg.PSEUDO_LABELS.use_post_process:
+        #     labels, centers, num_classes = post_process(cfg, labels, hybrid_instance_sim, features)
 
     return labels, centers, num_classes, indep_thres
 

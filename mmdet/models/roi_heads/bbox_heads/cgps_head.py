@@ -170,7 +170,7 @@ class CGPSHead(nn.Module):
                 'is_known':is_known[mask],
                 'image_id':id
             })
-        gfn_losses, _ = self.gfn(scene_emb, query_emb, target)
+        gfn_losses = self.gfn(scene_emb, query_emb, target)
         return gfn_losses
 
     def init_weights(self):
@@ -476,13 +476,13 @@ class CGPSHead(nn.Module):
 
         return losses
 
-    @force_fp32(apply_to=('cls_score', 'bbox_pred', 'id_pred', 'crop_feat'))
+    @force_fp32(apply_to=('cls_score', 'bbox_pred', 'id_pred', 'tmp_feat'))
     def get_bboxes(self,
                    rois,
                    cls_score,
                    bbox_pred,
                    id_pred,
-                   crop_feat,
+                   tmp_feat,
                    img_shape,
                    scale_factor,
                    rescale=False,
@@ -516,7 +516,7 @@ class CGPSHead(nn.Module):
                 scores[:, 0] = 1
                 scores[:, 1] = 0
 
-            if crop_feat is None:
+            if tmp_feat is None:
                 det_bboxes, det_labels, det_ids = multiclass_nms_aug(bboxes, scores, [id_pred],
                                                         cfg.score_thr, cfg.nms,
                                                         cfg.max_per_img)
@@ -527,11 +527,11 @@ class CGPSHead(nn.Module):
                 det_bboxes = torch.cat([det_bboxes, det_ids], dim=1)
 
             else:
-                det_bboxes, det_labels, det_ids = multiclass_nms_aug(bboxes, scores, [id_pred, crop_feat],
+                det_bboxes, det_labels, det_ids = multiclass_nms_aug(bboxes, scores, [id_pred, tmp_feat],
                                                         cfg.score_thr, cfg.nms,
                                                         cfg.max_per_img)
                 if det_ids is None:
-                    det_ids, det_ids2 = det_bboxes.new_zeros((0, 256)), det_bboxes.new_zeros((0, crop_feat.shape[-1]))
+                    det_ids, det_ids2 = det_bboxes.new_zeros((0, 256)), det_bboxes.new_zeros((0, tmp_feat.shape[-1]))
                 else:
                     det_ids, det_ids2 = det_ids[0], det_ids[1]
                 det_bboxes = torch.cat([det_bboxes, det_ids, det_ids2], dim=1)
