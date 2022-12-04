@@ -102,22 +102,22 @@ class NormAwareEmbedding(nn.Module):
             assert sum(tmp) == dim
             return tmp
 
-class SEAttention(nn.Module):
-    def __init__(self, channel=512, reduction=16):
-        super().__init__()
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.fc = nn.Sequential(
-            nn.Linear(channel, channel // reduction, bias=False),
-            nn.ReLU(inplace=True),
-            nn.Linear(channel // reduction, channel, bias=False),
-            nn.Sigmoid()
-        )
+# class SEAttention(nn.Module):
+#     def __init__(self, channel=512, reduction=16):
+#         super().__init__()
+#         self.avg_pool = nn.AdaptiveAvgPool2d(1)
+#         self.fc = nn.Sequential(
+#             nn.Linear(channel, channel // reduction, bias=False),
+#             nn.ReLU(inplace=True),
+#             nn.Linear(channel // reduction, channel, bias=False),
+#             nn.Sigmoid()
+#         )
 
-    def forward(self, x):
-        b, c, _, _ = x.size()
-        y = self.avg_pool(x).view(b, c)
-        y = self.fc(y).view(b, c, 1, 1)
-        return x * y.expand_as(x)
+#     def forward(self, x):
+#         b, c, _, _ = x.size()
+#         y = self.avg_pool(x).view(b, c)
+#         y = self.fc(y).view(b, c, 1, 1)
+#         return x * y.expand_as(x)
 
 class BaseRoIHead(nn.Module, metaclass=ABCMeta):
     """Base class for RoIHeads."""
@@ -129,7 +129,8 @@ class BaseRoIHead(nn.Module, metaclass=ABCMeta):
                  mask_head=None,
                  shared_head=None,
                  train_cfg=None,
-                 test_cfg=None):
+                 test_cfg=None,
+                 use_gfn=False):
         super(BaseRoIHead, self).__init__()
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
@@ -144,52 +145,53 @@ class BaseRoIHead(nn.Module, metaclass=ABCMeta):
 
         self.init_assigner_sampler()
 
-        self.use_global_Local_context = False
-        self.sampler_num = None
-        self.cxt_feat_len = 1024
-        self.psn_feat_len = 2048
-        self.feat_res4_len = 1024
-        self.feat_res5_len = 2048
-        # self.reid_len = 2048
-        # self.cat_reid_len = self.reid_len + self.cxt_feat_len + self.reid_len
-        self.out_dim_reg = 4
-        self.cxt_feat_extractor_scenario = nn.Sequential(
-            nn.Conv2d(1024, 256, 3, 1, 1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(256, 256, 3, 1, 1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(256, self.cxt_feat_len, 3, 1, 1),
-            nn.BatchNorm2d(self.cxt_feat_len),
-            nn.ReLU(inplace=True),
-            nn.AdaptiveMaxPool2d(1)
-        )
-        self.cxt_feat_extractor_psn = nn.Sequential(
-            nn.Conv2d(2048, 256, 1, 1, 0),
-            nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(256, 256, 1, 1, 0),
-            nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(256, self.psn_feat_len, 3, 1, 1),
-            nn.BatchNorm2d(self.psn_feat_len),
-            nn.ReLU(inplace=True),
-            nn.AdaptiveMaxPool2d(1)
-        )
-        # self.embedding_head = NormAwareEmbedding(
-        #     featmap_names=["feat_res4", "feat_res5", "cxt_scenario", "cxt_psn"],
-        #     in_channels=[self.feat_res4_len, self.feat_res5_len, self.cxt_feat_len, self.psn_feat_len],
-        #     dim=[256, 128, 128, 128],
+        self.use_gfn = use_gfn
+        # self.use_global_Local_context = False
+        # self.sampler_num = None
+        # self.cxt_feat_len = 1024
+        # self.psn_feat_len = 2048
+        # self.feat_res4_len = 1024
+        # self.feat_res5_len = 2048
+        # # self.reid_len = 2048
+        # # self.cat_reid_len = self.reid_len + self.cxt_feat_len + self.reid_len
+        # self.out_dim_reg = 4
+        # self.cxt_feat_extractor_scenario = nn.Sequential(
+        #     nn.Conv2d(1024, 256, 3, 1, 1),
+        #     nn.BatchNorm2d(256),
+        #     nn.ReLU(inplace=True),
+        #     nn.Conv2d(256, 256, 3, 1, 1),
+        #     nn.BatchNorm2d(256),
+        #     nn.ReLU(inplace=True),
+        #     nn.Conv2d(256, self.cxt_feat_len, 3, 1, 1),
+        #     nn.BatchNorm2d(self.cxt_feat_len),
+        #     nn.ReLU(inplace=True),
+        #     nn.AdaptiveMaxPool2d(1)
         # )
-        self.embedding_head = NormAwareEmbedding(
-            featmap_names=["feat_res4", "feat_res5"],
-            in_channels=[self.feat_res4_len, self.feat_res5_len],
-            dim=[256],
-        )
-        self.fc_reg = nn.Sequential(nn.Linear(self.feat_res5_len, self.out_dim_reg),
-                        nn.BatchNorm1d(self.out_dim_reg)
-        )
+        # self.cxt_feat_extractor_psn = nn.Sequential(
+        #     nn.Conv2d(2048, 256, 1, 1, 0),
+        #     nn.BatchNorm2d(256),
+        #     nn.ReLU(inplace=True),
+        #     nn.Conv2d(256, 256, 1, 1, 0),
+        #     nn.BatchNorm2d(256),
+        #     nn.ReLU(inplace=True),
+        #     nn.Conv2d(256, self.psn_feat_len, 3, 1, 1),
+        #     nn.BatchNorm2d(self.psn_feat_len),
+        #     nn.ReLU(inplace=True),
+        #     nn.AdaptiveMaxPool2d(1)
+        # )
+        # # self.embedding_head = NormAwareEmbedding(
+        # #     featmap_names=["feat_res4", "feat_res5", "cxt_scenario", "cxt_psn"],
+        # #     in_channels=[self.feat_res4_len, self.feat_res5_len, self.cxt_feat_len, self.psn_feat_len],
+        # #     dim=[256, 128, 128, 128],
+        # # )
+        # self.embedding_head = NormAwareEmbedding(
+        #     featmap_names=["feat_res4", "feat_res5"],
+        #     in_channels=[self.feat_res4_len, self.feat_res5_len],
+        #     dim=[256],
+        # )
+        # self.fc_reg = nn.Sequential(nn.Linear(self.feat_res5_len, self.out_dim_reg),
+        #                 nn.BatchNorm1d(self.out_dim_reg)
+        # )
 
     @property
     def with_bbox(self):

@@ -83,10 +83,6 @@ class TwoStageDetector(BaseDetector):
         x = self.backbone(img)  # [1, 256, 216, 376], [1, 512, 108, 188], [1, 1024, 54, 94], [1, 2048, 27, 47]
         if self.with_neck:
             x = self.neck(x)    # [1, 1024, 54, 94]
-        
-        # torch.Size([1, 256, 108, 188]), torch.Size([1, 256, 54, 94]), torch.Size([1, 256, 27, 47]), torch.Size([1, 256, 14, 24]), torch.Size([1, 256, 7, 12])
-        # for i in range(len(x)):
-        #     print(x[i].shape)
         return x
 
     def forward_dummy(self, img):

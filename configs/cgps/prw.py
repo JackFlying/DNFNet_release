@@ -11,6 +11,7 @@ UNCERTAINTY = True
 HARD_MINING = True
 model = dict(
     roi_head=dict(
+        use_gfn=False,
         bbox_head=dict(
             testing=TEST,
             type='CGPSHead',
@@ -27,27 +28,32 @@ model = dict(
             use_hard_mining=False,
             co_learning=CO_LEARNING,
             IoU_loss_clip=[0.7, 1.0],
-            IoU_memory_clip=[0.7, 1.0],
+            IoU_memory_clip=[0.05, 0.9],
             IoU_momentum=0.2,
-            foreground_weight=0.8,
             momentum=0.2,
             co_learning_weight=0.3,
             use_part_feat=USE_PART_FEAT,
             global_weight= GLOBAL_WEIGHT if USE_PART_FEAT else 1,
             use_hybrid_loss=False,
-            use_circle_loss=False,
-            use_unified_loss=False,
             use_instance_loss=False,
             use_inter_loss=False,
-            use_mean_feat=False,
-            eps=0.1,
             triplet_instance_weight=1,
-            circle_weight=1,
-            unified_weight=1,
             num_features=256,
             margin=0.3,
             loss_bbox=dict(type='L1Loss', loss_weight=1),
-            loss_reid=dict(loss_weight=1.0)
+            loss_reid=dict(loss_weight=1.0),
+            gfn_config=dict(
+                use_gfn=True,
+                gfn_mode='image',    # {'image', 'separate', 'combined'}
+                gfn_activation_mode='se',   # combined:{'se', 'sum', 'identity'}
+                gfn_filter_neg=True,
+                gfn_query_mode='batch', # {'batch', 'oim'}
+                gfn_use_image_lut=True,
+                gfn_train_temp=0.1,
+                gfn_se_temp=0.2,
+                gfn_num_sample=(1, 1),
+                emb_dim=2048,
+            )
         )
     )
 )

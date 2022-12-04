@@ -11,7 +11,7 @@ from mmdet.core import (auto_fp16, build_bbox_coder, force_fp32, multi_apply,
 from mmdet.models.builder import HEADS, build_loss
 from mmdet.models.losses import accuracy
 from mmdet.models.utils import HybridMemoryMultiFocalPercent, Quaduplet2Loss, CircleLoss, UnifiedLoss
-
+from .gfn import GalleryFilterNetwork
 
 @HEADS.register_module()
 class CGPSHead(nn.Module):
@@ -42,8 +42,6 @@ class CGPSHead(nn.Module):
                  rcnn_bbox_bn=False,
                  id_num=55272,
                  testing=False,
-                 no_bg=False,
-                 no_bg_triplet=False,
                  instance_top_percent=1.,
                  cluster_top_percent=0.1,
                  temperature=0.05,
@@ -53,30 +51,24 @@ class CGPSHead(nn.Module):
                  use_IoU_loss=False,
                  use_IoU_memory=False,
                  IoU_loss_clip=[0.7, 1.0],
-                 IoU_memory_clip=[0.7, 1.0],
+                 IoU_memory_clip=[0.2, 0.9],
                  IoU_momentum=0.1,
-                 foreground_weight=0.9,
                  use_part_feat=False,
                  use_uncertainty_loss=False,
                  use_hybrid_loss=False,
                  use_quaduplet_loss=True,
-                 use_circle_loss=True,
-                 use_unified_loss=False,
                  use_instance_loss=True,
                  use_inter_loss=False,
-                 use_mean_feat=False,
                  co_learning=False,
-                 eps=0.1,
                  co_learning_weight=0.5,
                  use_hard_mining=False,
                  global_weight=0.9,
-                 circle_weight=1,
-                 unified_weight=1,
                  triplet_weight=1,
                  num_features=256,
                  margin=0.3,
                  triplet_bg_weight=0.25,
-                 triplet_instance_weight=1):
+                 triplet_instance_weight=1,
+                 gfn_config=None):
         super(CGPSHead, self).__init__()
         assert with_cls or with_reg
         self.with_avg_pool = with_avg_pool
@@ -97,27 +89,20 @@ class CGPSHead(nn.Module):
                                                         instance_top_percent=instance_top_percent, use_cluster_hard_loss=use_cluster_hard_loss,
                                                         use_instance_hard_loss=use_instance_hard_loss, use_hybrid_loss=use_hybrid_loss, use_IoU_loss=use_IoU_loss, \
                                                         use_IoU_memory=use_IoU_memory, IoU_loss_clip=IoU_loss_clip, IoU_memory_clip=IoU_memory_clip, \
-                                                        IoU_momentum=IoU_momentum, use_uncertainty_loss=use_uncertainty_loss, foreground_weight=foreground_weight,
-                                                        use_part_feat=use_part_feat, co_learning=co_learning, use_hard_mining=use_hard_mining, eps=eps)
+                                                        IoU_momentum=IoU_momentum, use_uncertainty_loss=use_uncertainty_loss,
+                                                        use_part_feat=use_part_feat, co_learning=co_learning, use_hard_mining=use_hard_mining)
+        
         self.loss_triplet = Quaduplet2Loss(margin=margin, bg_weight=triplet_bg_weight, instance_weight=triplet_instance_weight, use_IoU_loss=use_IoU_loss, \
                                             IoU_loss_clip=IoU_loss_clip, use_uncertainty_loss=use_uncertainty_loss, use_hard_mining=use_hard_mining)
-        self.loss_circle = CircleLoss(m=0.25, gamma=16)
-        self.loss_unified = UnifiedLoss(gamma=16)
         self.use_quaduplet_loss = use_quaduplet_loss
-        self.use_circle_loss = use_circle_loss
-        self.use_unified_loss = use_unified_loss
-        self.use_mean_feat = use_mean_feat
         self.reid_loss_weight = loss_reid['loss_weight']
-        self.no_bg = no_bg
-        self.no_bg_triplet = no_bg_triplet
         self.triplet_weight = triplet_weight
-        self.circle_weight = circle_weight
-        self.unified_weight = unified_weight
         self.use_instance_loss = use_instance_loss
         self.use_inter_loss = use_inter_loss
         self.global_weight = global_weight
         self.co_learning = co_learning
         self.co_learning_weight = co_learning_weight
+        self.use_gfn = gfn_config['use_gfn']
 
         in_channels = self.in_channels
         if self.with_avg_pool:
@@ -138,12 +123,55 @@ class CGPSHead(nn.Module):
         self.id_feature = nn.Linear(in_channels, 128)
         self.id_feature1 = nn.Linear(in_channels // 2, 128)
         
-        # self.id_part_feature = nn.Linear(in_channels, 128)
-        # self.id_part_feature1 = nn.Linear(in_channels // 2, 128)
         self.id_part_feature = nn.ModuleList([nn.Linear(in_channels, 128), nn.Linear(in_channels, 128)])
         self.id_part_feature1 = nn.ModuleList([nn.Linear(in_channels // 2, 128), nn.Linear(in_channels // 2, 128)])
-        self.debug_imgs = None
+
+        self.scene_feature = nn.Linear(in_channels // 2, 1024)
+        self.scene_feature1 = nn.Linear(in_channels, 1024)
+        
+        # self.debug_imgs = None
         self.proposal_score_max = False
+        # # Gallery-Filter Network
+        if self.use_gfn:
+            ## Build Gallery Filter Network
+            self.gfn = GalleryFilterNetwork(
+                mode=gfn_config['gfn_mode'],
+                gfn_activation_mode=gfn_config['gfn_activation_mode'],
+                emb_dim=gfn_config['emb_dim'], 
+                temp=gfn_config['gfn_train_temp'], 
+                se_temp=gfn_config['gfn_se_temp'],
+                filter_neg=gfn_config['gfn_filter_neg'],
+                use_image_lut=gfn_config['gfn_use_image_lut'],
+                gfn_query_mode=gfn_config['gfn_query_mode'],
+                pos_num_sample=gfn_config['gfn_num_sample'][0], 
+                neg_num_sample=gfn_config['gfn_num_sample'][1],
+            )
+        else:
+            self.gfn = None
+
+    def gfn_forward(self, scene_emb, query_emb, labels):
+        id_labels = labels[:, 1]
+        image_id = labels[:, 2]
+        scene_embs = [scene_emb[i].repeat(query_emb.shape[0] // scene_emb.shape[0], 1) for i in range(scene_emb.shape[0])]
+        scene_embs = torch.cat(scene_embs, dim=0)
+        
+        query_emb = query_emb[id_labels!=-2]
+        scene_embs = scene_embs[id_labels!=-2]
+        person_id = self.loss_reid.get_cluster_ids(id_labels[id_labels!=-2])
+        image_id = image_id[id_labels!=-2]
+        is_known = torch.ones_like(image_id).bool()
+
+        unique_image_id = torch.unique(image_id)
+        target = []
+        for id in unique_image_id:
+            mask = (image_id == id)
+            target.append({
+                'person_id':person_id[mask],
+                'is_known':is_known[mask],
+                'image_id':id
+            })
+        gfn_losses, _ = self.gfn(scene_emb, query_emb, target)
+        return gfn_losses
 
     def init_weights(self):
         # conv layers are already initialized by ConvModule
@@ -166,14 +194,17 @@ class CGPSHead(nn.Module):
         return crop_feat
 
     @auto_fp16()
-    def forward(self, x1, x, part_feats1, part_feats):
+    def forward(self, x1, x, part_feats1, part_feats, scene_emb1, scene_emb2):
         x = x.view(x.size(0), -1)
         x1 = x1.view(x1.size(0), -1)
         cls_score = self.fc_cls(x) if self.with_cls else None
         bbox_pred = self.fc_reg(x) if self.with_reg else None
         id_pred = F.normalize(torch.cat((self.id_feature(x), self.id_feature1(x1)), axis=1))
+        if scene_emb1 is not None:
+            scene_embed = F.normalize(torch.cat((self.scene_feature(scene_emb1), self.scene_feature1(scene_emb2)), axis=1))
+        else:
+            scene_embed = None
 
-        # id_feature学到的是全局特征,可能不适合用来提取局部特征
         part_id_pred = None
         if part_feats1 is not None:
             part_id_pred = []
@@ -185,7 +216,7 @@ class CGPSHead(nn.Module):
                 id_feat = F.normalize(torch.cat((self.id_part_feature[i](part_feat), self.id_part_feature1[i](part_feat1)), axis=1))
                 part_id_pred.append(id_feat)
             part_id_pred = torch.cat(part_id_pred, dim=1)   # [N, 512]
-        return cls_score, bbox_pred, id_pred, part_id_pred
+        return cls_score, bbox_pred, id_pred, part_id_pred, scene_embed
 
     def _get_target_single_crop(self, pos_bboxes, neg_bboxes, pos_gt_bboxes, 
                            pos_gt_labels, pos_gt_crop_feats, cfg):
@@ -321,7 +352,7 @@ class CGPSHead(nn.Module):
              **kwargs):
 
         id_labels = labels[:, 1]    # memory中的索引
-        labels = labels[:, 0]   # 0表示正样本,  1表示负样本
+        labels = labels[:, 0]   # 0表示正样本(行人),  1表示负样本(背景)
         losses = dict()
         if cls_score is not None:
             avg_factor = max(torch.sum(label_weights > 0).float().item(), 1.)
@@ -384,17 +415,11 @@ class CGPSHead(nn.Module):
                 IoU = torchvision.ops.box_iou(pos_bbox_pred, pos_bbox_targets)
                 top_IoU = torchvision.ops.box_iou(top_pos_bbox_pred, top_pos_bbox_targets)
                 bottom_IoU = torchvision.ops.box_iou(bottom_pos_bbox_pred, bottom_pos_bbox_targets)
-                
-                # for a, b, c in zip(pos_bbox_targets, top_pos_bbox_targets, bottom_pos_bbox_targets):
-                #     print(a, b, c)
 
                 dialog = torch.eye(IoU.shape[0]).bool().cuda()
                 IoU = IoU[dialog]
                 top_IoU = top_IoU[dialog]
                 bottom_IoU = bottom_IoU[dialog]
-
-                # for a, b, c in zip(IoU, top_IoU, bottom_IoU):
-                #     print(a.item(), b.item(), c.item())
                 
             else:
                 losses['loss_bbox'] = bbox_pred.sum() * 0

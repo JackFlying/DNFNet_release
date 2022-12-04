@@ -3,11 +3,11 @@ _base_ = [
     '../_base_/datasets/coco_reid_unsup.py',
     '../_base_/schedules/schedule_1x_reid_norm_base.py', '../_base_/default_runtime.py'
 ]
-TEST = True
+TEST = False
 USE_PART_FEAT = True
 GLOBAL_WEIGHT = 0.8
 CO_LEARNING = False
-HARD_MINING = False
+HARD_MINING = True
 UNCERTAINTY = False
 model = dict(
     roi_head=dict(
@@ -43,6 +43,7 @@ model = dict(
             circle_weight=1,
             unified_weight=1,
             num_features=256,
+            eps=0.1,
             loss_bbox=dict(type='L1Loss', loss_weight=1),
             loss_reid=dict(loss_weight=1.0),
             )
@@ -157,10 +158,10 @@ PSEUDO_LABELS = dict(
     k2=6, # for jaccard distance
     search_type=0, # 0,1,2 for GPU, 3 for CPU (work for faiss)
     cluster_num=None,
-    iters=1,
-    LAMBDA_SIM1=0.,    # default: 0.3
+    iters=2,
+    LAMBDA_SIM1=0.3,    # default: 0.3
     LAMBDA_SIM2=0.1,
-    context_method='zero',    # sum, max, zero
+    context_method='max',    # sum, max, zero
     context_clip=True,
     threshold=0.5,
     use_post_process=False,

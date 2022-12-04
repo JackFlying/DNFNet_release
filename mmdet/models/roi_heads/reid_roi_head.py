@@ -169,16 +169,13 @@ class ReidRoIHead(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
         else:
             return None
 
-    def _bbox_forward(self, x, rois, id_labels=None, test=False):
+    def _bbox_forward(self, x, rois, labels=None, test=False):
         """Box head forward function used in both training and testing."""
         self.use_RoI_Align_feat = False
         self.use_part_feat = True
         part_feats, part_feats1, RoI_Align_feat = None, None, None
-
-        bbox_feats = self.bbox_roi_extractor(
-            x[:self.bbox_roi_extractor.num_inputs], rois)   # [N, 1024, 14, 14], [14, 14]表示[height, width]
+        bbox_feats = self.bbox_roi_extractor(x[:self.bbox_roi_extractor.num_inputs], rois)   # [N, 1024, 14, 14], [14, 14]表示[height, width]
         bbox_feats1 = F.adaptive_max_pool2d(bbox_feats, 1).squeeze(-1).squeeze(-1)  # [N, 1024, 1, 1]
-
         if self.use_part_feat:
             part_feats = torch.nn.AdaptiveAvgPool2d((2, 1))(bbox_feats)   # [N, 1024, 2, 1]
             part_feats1 = [part_feats[:, :, 0:1], part_feats[:, :, 1:2]] # 2 * [N, 1024, 1, 1]
@@ -188,38 +185,51 @@ class ReidRoIHead(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
             if self.use_part_feat:
                 part_feats = [self.shared_head(part_feats1[0]), self.shared_head(part_feats1[1])]
             if self.use_RoI_Align_feat:
-                RoI_Align_feat = bbox_feats.detach()
+                RoI_Align_feat = bbox_feats.detach()    # visualize heat map
             bbox_feats = F.adaptive_max_pool2d(bbox_feats, 1)   # [N, 2048, 1, 1]
+
+        # if not self.use_global_Local_context:
+        scene_emb1, scene_emb2, gfn_losses = None, None, torch.tensor(0.)
+        if self.use_gfn:
+            scene_emb1 = F.adaptive_max_pool2d(x[0], 1).squeeze(-1).squeeze(-1) # x[0]=[N, 1024, H, W] => [N, 1024, 1, 1]
+            if self.with_shared_head:
+                scene_emb_size = 56
+                scene_emb2 = F.adaptive_max_pool2d(x[0], scene_emb_size) # [N, 1024, scene_emb_size, scene_emb_size]
+                scene_emb2 = self.shared_head(scene_emb2) # 
+                scene_emb2 = F.adaptive_max_pool2d(scene_emb2, 1).squeeze(-1).squeeze(-1) # [N, 1024, 1, 1]
         
-        if not self.use_global_Local_context:
-            cls_score, bbox_pred, id_pred, part_id_pred = self.bbox_head(bbox_feats1, bbox_feats, part_feats1, part_feats) # [N, 256]
-            bbox_results = dict(cls_score=cls_score, bbox_pred=bbox_pred, bbox_feats=bbox_feats, id_pred=id_pred, \
-                                RoI_Align_feat=RoI_Align_feat, part_id_pred=part_id_pred)
-        else:
-            bbox_feats = bbox_feats.squeeze(-1).squeeze(-1)
-            bbox_pred = self.fc_reg(bbox_feats) # [N, 4]
-            # cxt_feat_scenario = self.cxt_feat_extractor_scenario(x[0]).squeeze(-1).squeeze(-1)  # [N, 1024]
-            # if test:
-            #     cxt_feat_scenario_proposalNum = cxt_feat_scenario.repeat(bbox_feats.shape[0], 1)
-            #     cxt_feat_psn_proposalNum = torch.mean(bbox_feats, dim=0).repeat(bbox_feats.shape[0], 1)    # [N, 2048]
-            # else:
-            #     cxt_feat_scenario_proposalNum = torch.cat([cxt_feat_scenario[idx_bs:idx_bs+1].repeat(self.sampler_num[idx_bs], 1) \
-            #                                             for idx_bs in range(cxt_feat_scenario.shape[0])], dim=0)
-            #     cxt_feat_psn_proposalNum = torch.cat([torch.mean(bbox_feats[idx_bs * self.sampler_num[idx_bs]:(idx_bs + 1) * self.sampler_num[idx_bs]]\
-            #                                             [id_labels[idx_bs * self.sampler_num[idx_bs]:(idx_bs + 1) * self.sampler_num[idx_bs]] != -2], dim=0).repeat(self.sampler_num[idx_bs], 1) \
-            #                                             for idx_bs in range(cxt_feat_scenario.shape[0])], dim=0)
-            # cxt_feat_psn_proposalNum = self.cxt_feat_extractor_psn(cxt_feat_psn_proposalNum.unsqueeze(-1).unsqueeze(-1)).squeeze(-1).squeeze(-1)
-            # box_features = dict(feat_res4=bbox_feats1, feat_res5=bbox_feats, cxt_scenario=cxt_feat_scenario_proposalNum, cxt_psn=cxt_feat_psn_proposalNum)
-            box_features = dict(feat_res4=bbox_feats1, feat_res5=bbox_feats)
-            box_embeddings, box_cls_scores = self.embedding_head(box_features)
-            if box_cls_scores.dim() == 0:
-                box_cls_scores = box_cls_scores.unsqueeze(0)
-            # box_cls_scores = box_cls_scores.unsqueeze(1)
-            # box_cls_scores = torch.cat([box_cls_scores, 1 - box_cls_scores], dim=-1)
-            box_cls_scores_logit = F.sigmoid(box_cls_scores).unsqueeze(-1)
-            box_cls_scores_logit = torch.cat([1 - box_cls_scores_logit, box_cls_scores_logit], dim=-1)
-            bbox_results = dict(cls_score=box_cls_scores_logit, cls_score_logit=box_cls_scores, bbox_pred=bbox_pred, \
-                                    bbox_feats=bbox_feats, id_pred=box_embeddings, RoI_Align_feat=RoI_Align_feat, part_id_pred=None)
+        cls_score, bbox_pred, id_pred, part_id_pred, scene_emb = self.bbox_head(bbox_feats1, bbox_feats, part_feats1, part_feats, scene_emb1, scene_emb2) # [N, 256]
+        if self.use_gfn and self.training:
+            gfn_losses = self.bbox_head.gfn_forward(scene_emb, id_pred, labels)
+
+        bbox_results = dict(cls_score=cls_score, bbox_pred=bbox_pred, bbox_feats=bbox_feats, id_pred=id_pred, \
+                            RoI_Align_feat=RoI_Align_feat, part_id_pred=part_id_pred, gfn_losses=gfn_losses)
+        # else:
+        #     bbox_feats = bbox_feats.squeeze(-1).squeeze(-1)
+        #     bbox_pred = self.fc_reg(bbox_feats) # [N, 4]
+        #     # cxt_feat_scenario = self.cxt_feat_extractor_scenario(x[0]).squeeze(-1).squeeze(-1)  # [N, 1024]
+        #     # if test:
+        #     #     cxt_feat_scenario_proposalNum = cxt_feat_scenario.repeat(bbox_feats.shape[0], 1)
+        #     #     cxt_feat_psn_proposalNum = torch.mean(bbox_feats, dim=0).repeat(bbox_feats.shape[0], 1)    # [N, 2048]
+        #     # else:
+        #     #     cxt_feat_scenario_proposalNum = torch.cat([cxt_feat_scenario[idx_bs:idx_bs+1].repeat(self.sampler_num[idx_bs], 1) \
+        #     #                                             for idx_bs in range(cxt_feat_scenario.shape[0])], dim=0)
+        #     #     cxt_feat_psn_proposalNum = torch.cat([torch.mean(bbox_feats[idx_bs * self.sampler_num[idx_bs]:(idx_bs + 1) * self.sampler_num[idx_bs]]\
+        #     #                                             [id_labels[idx_bs * self.sampler_num[idx_bs]:(idx_bs + 1) * self.sampler_num[idx_bs]] != -2], dim=0).repeat(self.sampler_num[idx_bs], 1) \
+        #     #                                             for idx_bs in range(cxt_feat_scenario.shape[0])], dim=0)
+        #     # cxt_feat_psn_proposalNum = self.cxt_feat_extractor_psn(cxt_feat_psn_proposalNum.unsqueeze(-1).unsqueeze(-1)).squeeze(-1).squeeze(-1)
+        #     # box_features = dict(feat_res4=bbox_feats1, feat_res5=bbox_feats, cxt_scenario=cxt_feat_scenario_proposalNum, cxt_psn=cxt_feat_psn_proposalNum)
+        #     box_features = dict(feat_res4=bbox_feats1, feat_res5=bbox_feats)
+        #     box_embeddings, box_cls_scores = self.embedding_head(box_features)
+        #     if box_cls_scores.dim() == 0:
+        #         box_cls_scores = box_cls_scores.unsqueeze(0)
+        #     # box_cls_scores = box_cls_scores.unsqueeze(1)
+        #     # box_cls_scores = torch.cat([box_cls_scores, 1 - box_cls_scores], dim=-1)
+        #     box_cls_scores_logit = F.sigmoid(box_cls_scores).unsqueeze(-1)
+        #     box_cls_scores_logit = torch.cat([1 - box_cls_scores_logit, box_cls_scores_logit], dim=-1)
+        #     bbox_results = dict(cls_score=box_cls_scores_logit, cls_score_logit=box_cls_scores, bbox_pred=bbox_pred, \
+        #                             bbox_feats=bbox_feats, id_pred=box_embeddings, RoI_Align_feat=RoI_Align_feat, part_id_pred=None)
+        
         return bbox_results
 
     def _bbox_forward_train(self, x, sampling_results, gt_bboxes, gt_labels,
@@ -230,24 +240,25 @@ class ReidRoIHead(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
         bbox_targets = self.bbox_head.get_targets(sampling_results, gt_bboxes,
                                                   gt_labels, self.train_cfg, **kwargs)
         labels = bbox_targets[0]
-        bbox_results = self._bbox_forward(x, rois, labels[:, 1])
+        bbox_results = self._bbox_forward(x, rois, labels)
 
-        if self.use_global_Local_context:
-            loss_bbox = self.bbox_head.loss(bbox_results['cls_score_logit'],
-                                            bbox_results['bbox_pred'],
-                                            bbox_results['id_pred'], 
-                                            rois,
-                                            *bbox_targets,
-                                            **kwargs)
-        else:
-            loss_bbox = self.bbox_head.loss(bbox_results['cls_score'],
-                                            bbox_results['bbox_pred'],
-                                            bbox_results['id_pred'], 
-                                            bbox_results['part_id_pred'],
-                                            rois,
-                                            # crop_targets=None,
-                                            *bbox_targets,
-                                            **kwargs)
+        # if self.use_global_Local_context:
+        #     loss_bbox = self.bbox_head.loss(bbox_results['cls_score_logit'],
+        #                                     bbox_results['bbox_pred'],
+        #                                     bbox_results['id_pred'], 
+        #                                     rois,
+        #                                     *bbox_targets,
+        #                                     **kwargs)
+        # else:
+        loss_bbox = self.bbox_head.loss(bbox_results['cls_score'],
+                                        bbox_results['bbox_pred'],
+                                        bbox_results['id_pred'], 
+                                        bbox_results['part_id_pred'],
+                                        rois,
+                                        # crop_targets=None,
+                                        *bbox_targets,
+                                        **kwargs)
+        loss_bbox.update(gfn_losses=bbox_results['gfn_losses'])
         bbox_results.update(loss_bbox=loss_bbox)
         return bbox_results
 

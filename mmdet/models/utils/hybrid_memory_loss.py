@@ -23,14 +23,14 @@ class HM_part(autograd.Function):
     @staticmethod
     @custom_fwd(cast_inputs=torch.float32)
     def forward(ctx, inputs, bottom_inputs, top_inputs, indexes, features, bottom_features, top_features, mIoU, \
-                    IoU, top_IoU, bottom_IoU, momentum, IoU_momentum, eps):
+                    IoU, top_IoU, bottom_IoU, momentum, IoU_momentum, IoU_memory_clip):
         ctx.features = features
         ctx.momentum = momentum
         ctx.mIoU = mIoU
         ctx.IoU_momentum = IoU_momentum
         ctx.bottom_features = bottom_features
         ctx.top_features = top_features
-        ctx.eps = eps
+        ctx.IoU_memory_clip = IoU_memory_clip
 
         outputs = inputs.mm(ctx.features.t())
         bottom_outputs = bottom_inputs.mm(ctx.bottom_features.t())
@@ -44,22 +44,22 @@ class HM_part(autograd.Function):
         bottom_inputs = all_gather_tensor(bottom_inputs)
         top_inputs = all_gather_tensor(top_inputs)
 
-        ctx.save_for_backward(all_inputs, all_indexes, all_IoU, all_top_IoU, all_bottom_IoU, bottom_inputs, top_inputs, eps)
+        ctx.save_for_backward(all_inputs, all_indexes, all_IoU, all_top_IoU, all_bottom_IoU, bottom_inputs, top_inputs, IoU_memory_clip)
         return outputs, bottom_outputs, top_outputs
 
     @staticmethod
     @custom_bwd
     def backward(ctx, grad_outputs, grad_bottom_outputs, grad_top_outputs):
-        inputs, indexes, IoU, top_IoU, bottom_IoU, bottom_inputs, top_inputs, eps = ctx.saved_tensors
+        inputs, indexes, IoU, top_IoU, bottom_IoU, bottom_inputs, top_inputs, IoU_memory_clip = ctx.saved_tensors
         grad_inputs = None
         if ctx.needs_input_grad[0]:
             grad_inputs = grad_outputs.mm(ctx.features)
             grad_bottom_outputs = grad_bottom_outputs.mm(ctx.bottom_features)
             grad_top_outputs = grad_top_outputs.mm(ctx.top_features)
-            
-        IoU = torch.clamp(IoU, min=ctx.momentum.item(), max=1-eps.item())
-        bottom_IoU = torch.clamp(bottom_IoU, min=ctx.momentum.item(), max=1-eps.item())
-        top_IoU = torch.clamp(top_IoU, min=ctx.momentum.item(), max=1-eps.item())
+
+        IoU = torch.clamp(IoU, min=IoU_memory_clip[0], max=IoU_memory_clip[1])
+        bottom_IoU = torch.clamp(bottom_IoU, min=IoU_memory_clip[0], max=IoU_memory_clip[1])
+        top_IoU = torch.clamp(top_IoU, min=IoU_memory_clip[0], max=IoU_memory_clip[1])
         for x, y, b, t, iou, biou, tiou in zip(inputs, indexes, bottom_inputs, top_inputs, IoU, bottom_IoU, top_IoU):
             # ctx.features[y] = ctx.momentum * ctx.features[y] + (1.0 - ctx.momentum) * x
             # ctx.bottom_features[y] = ctx.momentum * ctx.bottom_features[y] + (1.0 - ctx.momentum) * b
@@ -88,10 +88,12 @@ class HM_part(autograd.Function):
 
         return grad_inputs, grad_bottom_outputs, grad_top_outputs, None, None, None, None, None, None, None, None, None, None, None
 
-def hm_part(inputs, bottom_inputs, top_inputs, indexes, features, bottom_features, top_features, mIoU, momentum, IoU_momentum, IoU, top_IoU, bottom_IoU, eps):
+def hm_part(inputs, bottom_inputs, top_inputs, indexes, features, bottom_features, top_features, mIoU, momentum, IoU_momentum, \
+                    IoU, top_IoU, bottom_IoU, IoU_memory_clip):
     return HM_part.apply(
         inputs, bottom_inputs, top_inputs, indexes, features, bottom_features, top_features, mIoU, IoU, top_IoU, bottom_IoU, \
-                            torch.Tensor([momentum]).to(inputs.device), torch.Tensor([IoU_momentum]).to(inputs.device), torch.Tensor([eps]).to(inputs.device)
+        torch.Tensor([momentum]).to(inputs.device), torch.Tensor([IoU_momentum]).to(inputs.device), \
+        torch.Tensor(IoU_memory_clip).to(inputs.device)
     )
 
 class HM(autograd.Function):
@@ -136,21 +138,21 @@ class HybridMemoryMultiFocalPercent(nn.Module):
 
     def __init__(self, num_features, num_memory, temp=0.05, momentum=0.2, cluster_top_percent=0.1, instance_top_percent=1, \
                     use_cluster_hard_loss=True, use_instance_hard_loss=False, use_hybrid_loss=False, testing=False, use_uncertainty_loss=False,
-                    use_IoU_loss=False, use_IoU_memory=False, IoU_loss_clip=[0.7, 1.0], IoU_memory_clip=[0.7, 1.0], IoU_momentum=0.2,
-                    foreground_weight=0.9, use_part_feat=False, co_learning=False, use_hard_mining=False, eps=0.1):
+                    use_IoU_loss=False, use_IoU_memory=False, IoU_loss_clip=[0.7, 1.0], IoU_memory_clip=[0.2, 0.9], IoU_momentum=0.2,
+                    use_part_feat=False, co_learning=False, use_hard_mining=False):
         super(HybridMemoryMultiFocalPercent, self).__init__()
         self.use_cluster_hard_loss = use_cluster_hard_loss
         self.use_instance_hard_loss = use_instance_hard_loss
         self.use_hybrid_loss = use_hybrid_loss
-        self.use_mini_instance_hard_loss = False
+        # self.use_mini_instance_hard_loss = False
         self.num_features = num_features
         self.use_IoU_loss = use_IoU_loss
         self.use_IoU_memory = use_IoU_memory
         self.IoU_loss_clip = IoU_loss_clip
         self.IoU_memory_clip = IoU_memory_clip
         self.IoU_momentum = IoU_momentum
-        self.use_gt = False
-        self.foreground_weight = foreground_weight
+        # self.use_gt = False
+        # self.foreground_weight = foreground_weight
         self.use_part_feat = use_part_feat
 
         if testing == True:
@@ -166,7 +168,7 @@ class HybridMemoryMultiFocalPercent(nn.Module):
         self.co_learning = co_learning
         self.use_uncertainty_loss = use_uncertainty_loss
         self.hard_mining = use_hard_mining
-        self.eps = eps
+        # self.eps = eps
 
         self.idx = torch.zeros(num_memory).long()
         self.register_buffer("features", torch.zeros(num_memory, num_features))
@@ -470,7 +472,8 @@ class HybridMemoryMultiFocalPercent(nn.Module):
             bottom_inputs = F.normalize(part_feats[:, :256], p=2, dim=1)
             top_inputs = F.normalize(part_feats[:, 256:], p=2, dim=1)
             inputs, bottom_inputs, top_inputs = hm_part(inputs, bottom_inputs, top_inputs, indexes, self.features, self.bottom_features, \
-                                                self.top_features, self.mIoU, self.momentum, self.IoU_momentum, IoU, top_IoU, bottom_IoU, self.eps)   # [B, N]
+                                                self.top_features, self.mIoU, self.momentum, self.IoU_momentum, IoU, top_IoU, \
+                                                bottom_IoU, self.IoU_memory_clip)   # [B, N]
             inputs, bottom_inputs, top_inputs = inputs / self.temp, bottom_inputs / self.temp, top_inputs / self.temp
         else:
             inputs = hm(inputs, indexes, self.features, self.mIoU, IoU, self.momentum, self.IoU_momentum)   # [B, N]
@@ -479,10 +482,7 @@ class HybridMemoryMultiFocalPercent(nn.Module):
         losses = {}
         targets = self.labels[indexes].clone()
         labels = self.labels.clone() # [N, ]
-    
-        if self.co_learning:
-            target2s = self.label2s[indexes].clone()
-            label2s = self.label2s.clone() # [N, ]
+
 
         # cluster_inputs = inputs # [B, N]
         # if self.use_IoU_memory:
@@ -513,14 +513,6 @@ class HybridMemoryMultiFocalPercent(nn.Module):
                     top_cluster_hard_loss = self.get_hard_cluster_loss(labels.clone(), top_inputs, targets, top_IoU, indexes)
                     losses["part_cluster_hard_loss"] = bottom_cluster_hard_loss + top_cluster_hard_loss
             
-            if self.co_learning:
-                losses["global_cluster_hard_loss2"] = self.get_hard_cluster_loss(label2s.clone(), inputs, target2s, IoU, indexes)
-                if self.use_part_feat:
-                    bottom_cluster_hard_loss = self.get_hard_cluster_loss(label2s.clone(), bottom_inputs, target2s, bottom_IoU, indexes)
-                    top_cluster_hard_loss = self.get_hard_cluster_loss(label2s.clone(), top_inputs, target2s, top_IoU, indexes)
-                    losses["part_cluster_hard_loss2"] = bottom_cluster_hard_loss + top_cluster_hard_loss
-                else:
-                    losses["part_cluster_hard_loss2"] = torch.tensor(0.)
 
         if self.use_instance_hard_loss:
             losses["instance_hard_loss"] = self.get_all_hard_instance_loss(inputs, labels, targets)
