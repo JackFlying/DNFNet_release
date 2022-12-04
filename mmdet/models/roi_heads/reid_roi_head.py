@@ -196,9 +196,9 @@ class ReidRoIHead(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
                 scene_emb2 = self.shared_head(scene_emb2) # 
                 scene_emb2 = F.adaptive_max_pool2d(scene_emb2, 1).squeeze(-1).squeeze(-1) # [N, 1024, 1, 1]
         
-        cls_score, bbox_pred, id_pred, part_id_pred, scene_emb = self.bbox_head(bbox_feats1, bbox_feats, part_feats1, part_feats, scene_emb1, scene_emb2) # [N, 256]
+        cls_score, bbox_pred, id_pred, part_id_pred, scene_emb, query_embed = self.bbox_head(bbox_feats1, bbox_feats, part_feats1, part_feats, scene_emb1, scene_emb2) # [N, 256]
         if self.use_gfn and self.training:
-            gfn_losses = self.bbox_head.gfn_forward(scene_emb, id_pred, labels)
+            gfn_losses = self.bbox_head.gfn_forward(scene_emb, query_embed, labels)
 
         bbox_results = dict(cls_score=cls_score, bbox_pred=bbox_pred, bbox_feats=bbox_feats, id_pred=id_pred, \
                             RoI_Align_feat=RoI_Align_feat, part_id_pred=part_id_pred, scene_emb=scene_emb, gfn_losses=gfn_losses)

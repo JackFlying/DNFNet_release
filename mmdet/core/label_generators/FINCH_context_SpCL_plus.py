@@ -437,7 +437,7 @@ def label_generator_FINCH_context_SpCL_Plus(cfg, features, cuda=True, indep_thre
         top_feat_sim = top_features.mm(top_features.t())
         part_feat_sim = bottom_feat_sim + top_feat_sim
         instance_sim = cfg.PSEUDO_LABELS.part_feat.global_weight * instance_sim + cfg.PSEUDO_LABELS.part_feat.part_weight * part_feat_sim
-    
+
     person_sim = torch.zeros(len(unique_inds), len(unique_inds))
     if cfg.PSEUDO_LABELS.context_method == "max":
         img_sim = get_img_sim_by_max(instance_sim, split_num)
@@ -449,10 +449,10 @@ def label_generator_FINCH_context_SpCL_Plus(cfg, features, cuda=True, indep_thre
         scene_features = torch.load("./saved_file/scene_features.pth")
         scene_sim = scene_features.mm(scene_features.t())
 
-    if cfg.PSEUDO_LABELS.context_clip:
-        scene_sim = scene_sim * (scene_sim > cfg.PSEUDO_LABELS.threshold)
+    # if cfg.PSEUDO_LABELS.context_clip:
+    #     scene_sim = scene_sim * (scene_sim > cfg.PSEUDO_LABELS.threshold)
     
-    hybrid_instance_sim, initial_rank = get_hybrid_sim(instance_sim, split_num, person_sim, scene_sim, 0, cfg.PSEUDO_LABELS.lambda_scene)
+    hybrid_instance_sim, initial_rank = get_hybrid_sim(instance_sim, split_num, person_sim, scene_sim, 0., cfg.PSEUDO_LABELS.lambda_scene)
     if cfg.PSEUDO_LABELS.SpCL:
         labels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, features, initial_rank, cuda, indep_thres, all_inds, **kwargs)
     else:

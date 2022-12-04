@@ -128,6 +128,9 @@ class CGPSHead(nn.Module):
 
         self.scene_feature = nn.Linear(in_channels // 2, 1024)
         self.scene_feature1 = nn.Linear(in_channels, 1024)
+
+        self.query_feature = nn.Linear(in_channels, 1024)
+        self.query_feature1 = nn.Linear(in_channels // 2, 1024)
         
         # self.debug_imgs = None
         self.proposal_score_max = False
@@ -200,6 +203,8 @@ class CGPSHead(nn.Module):
         cls_score = self.fc_cls(x) if self.with_cls else None
         bbox_pred = self.fc_reg(x) if self.with_reg else None
         id_pred = F.normalize(torch.cat((self.id_feature(x), self.id_feature1(x1)), axis=1))
+        
+        query_embed = F.normalize(torch.cat((self.query_feature(x), self.query_feature1(x1)), axis=1))
         if scene_emb1 is not None:
             scene_embed = F.normalize(torch.cat((self.scene_feature(scene_emb1), self.scene_feature1(scene_emb2)), axis=1))
         else:
@@ -216,7 +221,7 @@ class CGPSHead(nn.Module):
                 id_feat = F.normalize(torch.cat((self.id_part_feature[i](part_feat), self.id_part_feature1[i](part_feat1)), axis=1))
                 part_id_pred.append(id_feat)
             part_id_pred = torch.cat(part_id_pred, dim=1)   # [N, 512]
-        return cls_score, bbox_pred, id_pred, part_id_pred, scene_embed
+        return cls_score, bbox_pred, id_pred, part_id_pred, scene_embed, query_embed
 
     def _get_target_single_crop(self, pos_bboxes, neg_bboxes, pos_gt_bboxes, 
                            pos_gt_labels, pos_gt_crop_feats, cfg):

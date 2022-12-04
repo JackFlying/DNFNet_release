@@ -3,7 +3,7 @@ _base_ = [
     '../_base_/datasets/coco_reid_unsup_prw.py',
     '../_base_/schedules/schedule_1x_reid_norm_base.py', '../_base_/default_runtime.py'
 ]
-TEST = False
+TEST = True
 USE_PART_FEAT = True
 GLOBAL_WEIGHT = 0.9
 CO_LEARNING = False
@@ -151,7 +151,7 @@ lr_config = dict(
     warmup='linear',
     warmup_iters=2242,
     warmup_ratio=1.0 / 200,
-    step=[16, 22])  #[16, 22]
+    step=[16, 22])
 total_epochs = 36
 
 SPCL=True
@@ -169,11 +169,11 @@ PSEUDO_LABELS = dict(
     k2=6, # for jaccard distance
     search_type=0, # 0,1,2 for GPU, 3 for CPU (work for faiss)
     cluster_num=None,
-    iters=0,    # 1
-    lambda_scene=0.1,   # 调成0,即zero初始化
+    iters=1,    # 1
+    lambda_scene=0,   # 调成0,即zero初始化
     lambda_person=0.1,
     context_method='scene',
-    # context_clip=False,
+    context_clip=False,
     threshold=0.5,
     use_post_process=False,
     filter_threshold=0.2,
