@@ -133,7 +133,7 @@ class ExtractFeatureHook(Hook):
         prog_bar = mmcv.ProgressBar(len(data_loader))
         for i in range(len(data_loader)):
             if self.cfg.testing:
-                if i > 50:
+                if i > 60:
                     break
             data = next(data_iter)
             gt_bboxes=data['gt_bboxes'][0]._data[0][0]
@@ -170,6 +170,7 @@ class ExtractFeatureHook(Hook):
             if self.use_part_feats:
                 bottom_feats = torch.from_numpy(result[0][0][:, 5+256:5+2*256])
                 top_feats = torch.from_numpy(result[0][0][:, 5+2*256:5+3*256])
+            if self.use_gfn:
                 scene_feats = torch.from_numpy(result[0][0][:, 5+3*256:5+3*256+2048])
 
             if normalize:

@@ -3,13 +3,13 @@ _base_ = [
     '../_base_/datasets/coco_reid_unsup_prw.py',
     '../_base_/schedules/schedule_1x_reid_norm_base.py', '../_base_/default_runtime.py'
 ]
-TEST = True
+TEST = False
 USE_PART_FEAT = True
 GLOBAL_WEIGHT = 0.9
 CO_LEARNING = False
 UNCERTAINTY = True
 HARD_MINING = True
-USE_GFN = True
+USE_GFN = False
 model = dict(
     roi_head=dict(
         use_gfn=USE_GFN,
@@ -47,7 +47,7 @@ model = dict(
             loss_reid=dict(loss_weight=1.0),
             gfn_config=dict(
                 use_gfn=USE_GFN,
-                gfn_mode='image',    # {'image', 'separate', 'combined'}
+                gfn_mode='combined',    # {'image', 'separate', 'combined'}
                 gfn_activation_mode='se',   # combined:{'se', 'sum', 'identity'}
                 gfn_filter_neg=True,
                 gfn_query_mode='batch', # {'batch', 'oim'}
@@ -169,7 +169,7 @@ PSEUDO_LABELS = dict(
     k2=6, # for jaccard distance
     search_type=0, # 0,1,2 for GPU, 3 for CPU (work for faiss)
     cluster_num=None,
-    iters=1,    # 1
+    iters=0,    # 1
     lambda_scene=0,   # 调成0,即zero初始化
     lambda_person=0.1,
     context_method='scene',
