@@ -3,7 +3,7 @@ _base_ = [
     '../_base_/datasets/coco_reid_unsup_prw.py',
     '../_base_/schedules/schedule_1x_reid_norm_base.py', '../_base_/default_runtime.py'
 ]
-TEST = False
+TEST = True
 USE_PART_FEAT = True
 GLOBAL_WEIGHT = 0.9
 CO_LEARNING = False
@@ -15,6 +15,7 @@ model = dict(
         use_gfn=USE_GFN,
         use_RoI_Align_feat=False,
         use_part_feat=USE_PART_FEAT,
+        scene_emb_size=56,
         bbox_head=dict(
             testing=TEST,
             type='CGPSHead',
@@ -29,6 +30,7 @@ model = dict(
             use_IoU_memory=False,
             use_uncertainty_loss=False,
             use_hard_mining=False,
+            norm_type='protonorm',    # ['l2norm', 'protonorm', 'batchnorm']
             co_learning=CO_LEARNING,
             IoU_loss_clip=[0.7, 1.0],
             IoU_memory_clip=[0.05, 0.9],
@@ -47,7 +49,7 @@ model = dict(
             loss_reid=dict(loss_weight=1.0),
             gfn_config=dict(
                 use_gfn=USE_GFN,
-                gfn_mode='combined',    # {'image', 'separate', 'combined'}
+                gfn_mode='image',    # {'image', 'separate', 'combined'}
                 gfn_activation_mode='se',   # combined:{'se', 'sum', 'identity'}
                 gfn_filter_neg=True,
                 gfn_query_mode='batch', # {'batch', 'oim'}
@@ -169,11 +171,11 @@ PSEUDO_LABELS = dict(
     k2=6, # for jaccard distance
     search_type=0, # 0,1,2 for GPU, 3 for CPU (work for faiss)
     cluster_num=None,
-    iters=0,    # 1
+    iters=1,    # 1
     lambda_scene=0,   # 调成0,即zero初始化
     lambda_person=0.1,
     context_method='scene',
-    context_clip=False,
+    # context_clip=False,
     threshold=0.5,
     use_post_process=False,
     filter_threshold=0.2,

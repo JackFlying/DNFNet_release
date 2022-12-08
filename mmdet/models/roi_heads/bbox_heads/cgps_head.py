@@ -12,6 +12,7 @@ from mmdet.models.builder import HEADS, build_loss
 from mmdet.models.losses import accuracy
 from mmdet.models.utils import HybridMemoryMultiFocalPercent, Quaduplet2Loss, CircleLoss, UnifiedLoss
 from .gfn import GalleryFilterNetwork
+from mmdet.models.utils.ProtoNorm import PrototypeNorm1d, register_targets_for_pn, convert_bn_to_pn
 
 @HEADS.register_module()
 class CGPSHead(nn.Module):
@@ -68,7 +69,8 @@ class CGPSHead(nn.Module):
                  margin=0.3,
                  triplet_bg_weight=0.25,
                  triplet_instance_weight=1,
-                 gfn_config=None):
+                 gfn_config=None,
+                 norm_type='l2norm'):
         super(CGPSHead, self).__init__()
         assert with_cls or with_reg
         self.with_avg_pool = with_avg_pool
@@ -103,6 +105,7 @@ class CGPSHead(nn.Module):
         self.co_learning = co_learning
         self.co_learning_weight = co_learning_weight
         self.use_gfn = gfn_config['use_gfn']
+        self.norm_type = norm_type   # ['l2norm', 'protonorm', 'batchnorm']
 
         in_channels = self.in_channels
         if self.with_avg_pool:
@@ -123,19 +126,27 @@ class CGPSHead(nn.Module):
         self.id_feature = nn.Linear(in_channels, 128)
         self.id_feature1 = nn.Linear(in_channels // 2, 128)
         
+        if self.norm_type is 'l2norm':
+            self.normalize = F.normalize
+            self.normalize_part = [F.normalize, F.normalize]
+        elif self.norm_type is 'protonorm':
+            self.normalize = PrototypeNorm1d(256)
+            self.normalize_part = nn.ModuleList([PrototypeNorm1d(256), PrototypeNorm1d(256)])
+        elif self.norm_type is 'batchnorm':
+            self.normalize = nn.BatchNorm1d(256)
+            self.normalize_part = nn.ModuleList([nn.BatchNorm1d(256), nn.BatchNorm1d(256)])
+        
         self.id_part_feature = nn.ModuleList([nn.Linear(in_channels, 128), nn.Linear(in_channels, 128)])
         self.id_part_feature1 = nn.ModuleList([nn.Linear(in_channels // 2, 128), nn.Linear(in_channels // 2, 128)])
-
-        self.scene_feature = nn.Linear(in_channels // 2, 1024)
-        self.scene_feature1 = nn.Linear(in_channels, 1024)
-
-        self.query_feature = nn.Linear(in_channels, 1024)
-        self.query_feature1 = nn.Linear(in_channels // 2, 1024)
         
         # self.debug_imgs = None
         self.proposal_score_max = False
         # # Gallery-Filter Network
         if self.use_gfn:
+            # self.scene_feature = nn.Linear(in_channels // 2, 1024)
+            # self.scene_feature1 = nn.Linear(in_channels, 1024)
+            self.query_feature = nn.Linear(in_channels, 1024)
+            self.query_feature1 = nn.Linear(in_channels // 2, 1024)
             ## Build Gallery Filter Network
             self.gfn = GalleryFilterNetwork(
                 mode=gfn_config['gfn_mode'],
@@ -153,27 +164,43 @@ class CGPSHead(nn.Module):
             self.gfn = None
 
     def gfn_forward(self, scene_emb, query_emb, labels):
-        id_labels = labels[:, 1]
-        image_id = labels[:, 2]
-        scene_embs = [scene_emb[i].repeat(query_emb.shape[0] // scene_emb.shape[0], 1) for i in range(scene_emb.shape[0])]
-        scene_embs = torch.cat(scene_embs, dim=0)
-        
+        id_labels, image_id,  person_id = labels[:, 1], labels[:, 2], labels[:, 3]
+        # filter bg
         query_emb = query_emb[id_labels!=-2]
-        scene_embs = scene_embs[id_labels!=-2]
-        person_id = self.loss_reid.get_cluster_ids(id_labels[id_labels!=-2])
+        # person_id = self.loss_reid.get_cluster_ids(id_labels[id_labels!=-2])
+        person_id = person_id[id_labels!=-2]
         image_id = image_id[id_labels!=-2]
-        is_known = torch.ones_like(image_id).bool()
-
         unique_image_id = torch.unique(image_id)
+        
         target = []
-        for id in unique_image_id:
-            mask = (image_id == id)
+        query_embs = []
+        for ig_id in unique_image_id:
+            mask = (image_id == ig_id)
+            
+            mask_query_emb = query_emb[mask]
+            mask_person_id = person_id[mask]
+            
+            unique_person_id = torch.unique(mask_person_id)
+            mask_ = torch.zeros_like(mask_person_id).bool()
+            for ps_id in unique_person_id:
+                index = torch.nonzero(mask_person_id == ps_id)
+                mask_[index[0]] = True
+
+            mask_person_id_ = mask_person_id[mask_]
+            mask_query_emb_ = mask_query_emb[mask_]
+            query_embs.append(mask_query_emb_)
+            
+            # 每个类只挑选出一个编号
+            is_known = torch.ones_like(mask_person_id_).bool()
+            # is_known[torch.randint(0, len(mask_person_id_), (1,))] = False
             target.append({
-                'person_id':person_id[mask],
-                'is_known':is_known[mask],
-                'image_id':id
+                'person_id':mask_person_id_,
+                'is_known':is_known,
+                'image_id':ig_id
             })
-        gfn_losses = self.gfn(scene_emb, query_emb, target)
+
+        query_embs = torch.cat(query_embs, dim=0)
+        gfn_losses = self.gfn(scene_emb, query_embs, target)
         return gfn_losses
 
     def init_weights(self):
@@ -188,7 +215,21 @@ class CGPSHead(nn.Module):
         nn.init.constant_(self.id_feature.bias, 0)
         nn.init.normal_(self.id_feature1.weight, 0, 0.001)
         nn.init.constant_(self.id_feature1.bias, 0)
-
+        for i in range(len(self.id_part_feature)):
+            nn.init.normal_(self.id_part_feature[i].weight, 0, 0.001)
+            nn.init.constant_(self.id_part_feature[i].bias, 0)
+            nn.init.normal_(self.id_part_feature1[i].weight, 0, 0.001)
+            nn.init.constant_(self.id_part_feature1[i].bias, 0)
+        if self.use_gfn:
+            # nn.init.normal_(self.scene_feature.weight, 0, 0.001)
+            # nn.init.constant_(self.scene_feature.bias, 0)
+            # nn.init.normal_(self.scene_feature1.weight, 0, 0.001)
+            # nn.init.constant_(self.scene_feature1.bias, 0) 
+            nn.init.normal_(self.query_feature.weight, 0, 0.001)
+            nn.init.constant_(self.query_feature.bias, 0)
+            nn.init.normal_(self.query_feature1.weight, 0, 0.001)
+            nn.init.constant_(self.query_feature1.bias, 0) 
+        
     @auto_fp16()
     def crop_forward(self, crop_feats1, crop_feats2):
         crop_feat1 = crop_feats1.squeeze(-1).squeeze(-1)
@@ -197,18 +238,25 @@ class CGPSHead(nn.Module):
         return crop_feat
 
     @auto_fp16()
-    def forward(self, x1, x, part_feats1, part_feats, scene_emb1, scene_emb2):
+    def forward(self, x1, x, part_feats1, part_feats, scene_emb1, scene_emb2, labels):
+        
+        if self.norm_type == 'protonorm' and self.training:
+            id_labels = labels[:, 1]
+            person_id = id_labels.clone()
+            person_id[id_labels!=-2] = self.loss_reid.get_cluster_ids(id_labels[id_labels!=-2])
+            register_targets_for_pn(self.normalize, person_id.long())
+            register_targets_for_pn(self.normalize_part, person_id.long())
+
         x = x.view(x.size(0), -1)
         x1 = x1.view(x1.size(0), -1)
         cls_score = self.fc_cls(x) if self.with_cls else None
         bbox_pred = self.fc_reg(x) if self.with_reg else None
-        id_pred = F.normalize(torch.cat((self.id_feature(x), self.id_feature1(x1)), axis=1))
-        
-        query_embed = F.normalize(torch.cat((self.query_feature(x), self.query_feature1(x1)), axis=1))
-        if scene_emb1 is not None:
-            scene_embed = F.normalize(torch.cat((self.scene_feature(scene_emb1), self.scene_feature1(scene_emb2)), axis=1))
-        else:
-            scene_embed = None
+        id_pred = self.normalize(torch.cat((self.id_feature(x), self.id_feature1(x1)), axis=1))
+        scene_embed, query_embed = None, None
+
+        if self.use_gfn:
+            query_embed = F.normalize(torch.cat((self.query_feature(x), self.query_feature1(x1)), axis=1))
+            # scene_embed = F.normalize(torch.cat((self.scene_feature(scene_emb1), self.scene_feature1(scene_emb2)), axis=1))
 
         part_id_pred = None
         if part_feats1 is not None:
@@ -218,7 +266,7 @@ class CGPSHead(nn.Module):
                 part_feat = part_feats[i]
                 part_feat1 = part_feat1.view(part_feat1.size(0), -1)
                 part_feat = part_feat.view(part_feat.size(0), -1)
-                id_feat = F.normalize(torch.cat((self.id_part_feature[i](part_feat), self.id_part_feature1[i](part_feat1)), axis=1))
+                id_feat = self.normalize_part[i](torch.cat((self.id_part_feature[i](part_feat), self.id_part_feature1[i](part_feat1)), axis=1))
                 part_id_pred.append(id_feat)
             part_id_pred = torch.cat(part_id_pred, dim=1)   # [N, 512]
         return cls_score, bbox_pred, id_pred, part_id_pred, scene_embed, query_embed
@@ -275,7 +323,7 @@ class CGPSHead(nn.Module):
         # original implementation uses new_zeros since BG are set to be 0
         # now use empty & fill because BG cat_id = num_classes,
         # FG cat_id = [0, num_classes-1]
-        labels = pos_bboxes.new_full((num_samples, 3),
+        labels = pos_bboxes.new_full((num_samples, pos_gt_labels.shape[1]),
                                      self.num_classes,  # num_classes = 1
                                      dtype=torch.long)
         # background id is -2
@@ -284,7 +332,7 @@ class CGPSHead(nn.Module):
         bbox_targets = pos_bboxes.new_zeros(num_samples, 4)
         bbox_weights = pos_bboxes.new_zeros(num_samples, 4)
         if num_pos > 0:
-            labels[:num_pos] = pos_gt_labels[:, :3]
+            labels[:num_pos] = pos_gt_labels[:, :]
             pos_weight = 1.0 if cfg.pos_weight <= 0 else cfg.pos_weight
             label_weights[:num_pos] = pos_weight
             if not self.reg_decoded_bbox:
@@ -429,7 +477,7 @@ class CGPSHead(nn.Module):
             else:
                 losses['loss_bbox'] = bbox_pred.sum() * 0
                 IoU = torch.zeros(0).cuda()
-            
+
         rid_pred = id_pred[id_labels!=-2]
         rid_labels = id_labels[id_labels!=-2]
         rpart_feats = part_feats[id_labels!=-2]

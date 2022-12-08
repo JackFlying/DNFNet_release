@@ -199,7 +199,7 @@ class GalleryFilterNetwork(nn.Module):
         # Produce labels
         self.device = scene_emb.device
         is_known_dict = {}
-        for t in targets:   # dict_keys(['boxes', 'image_id', 'area', 'person_id', 'image_size', 'id', 'iou_thresh', 'is_known', 'labels'])
+        for t in targets:
             for pid, is_known in zip(t['person_id'].tolist(), t['is_known'].tolist()):
                 is_known_dict[pid] = is_known
         query_pids_list = [t['person_id'] for t in targets]
@@ -310,7 +310,6 @@ class GalleryFilterNetwork(nn.Module):
                             if query_label not in image_query_label_set:
                                 if len(query_image_idx_set.intersection(image_query_label_set)) > 0:
                                     if (image_id not in chosen_image_id_set) and (image_id not in image_id_list): 
-                                        #
                                         lut_image_feat_list.append(image_dict['image_feat'].to(self.device))
                                         lut_query_feat_list.append(image_dict['query_feat'].to(self.device)) 
                                         lut_query_label_list.append(image_dict['query_label'].to(self.device)) 
@@ -454,15 +453,14 @@ class GalleryFilterNetwork(nn.Module):
             gfn_a1, gfn_p = torch.where(gfn_image_match_mask)
             gfn_a2, gfn_n = torch.where(~gfn_image_match_mask)
             indices_tuple = (gfn_a1, gfn_p, gfn_a2, gfn_n)
-
             # Compute GFN Loss
+            # print("image_labels", image_labels)
             gfn_loss = self.criterion(scene_emb, image_labels, indices_tuple=indices_tuple)
         else:
             raise NotImplementedError
-
+        # print("gfn_loss", gfn_loss)
         # Store loss and additional metrics in dicts
         # gfn_loss_dict = {'gfn_loss': gfn_loss}
         # gfn_metric_dict = {}
-
         # Return losses, metrics
         return gfn_loss

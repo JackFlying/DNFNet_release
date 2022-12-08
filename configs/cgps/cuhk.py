@@ -9,8 +9,13 @@ GLOBAL_WEIGHT = 0.8
 CO_LEARNING = False
 HARD_MINING = True
 UNCERTAINTY = False
+USE_GFN = True
 model = dict(
     roi_head=dict(
+        use_gfn=USE_GFN,
+        use_RoI_Align_feat=False,
+        use_part_feat=USE_PART_FEAT,
+        scene_emb_size=56,
         bbox_head=dict(
             testing=TEST,
             type='CGPSHead',
@@ -27,25 +32,30 @@ model = dict(
             use_hard_mining=HARD_MINING,
             co_learning=CO_LEARNING,
             IoU_loss_clip=[0.7, 1.0],
-            IoU_memory_clip=[0.7, 1.0],
+            IoU_memory_clip=[0.05, 0.9],
             IoU_momentum=0.1,
-            foreground_weight=0.8,
             momentum=0.2,
             use_part_feat=USE_PART_FEAT,
             global_weight= GLOBAL_WEIGHT if USE_PART_FEAT else 1,
             use_hybrid_loss=False,
-            use_circle_loss=False,
-            use_unified_loss=False,
             use_instance_loss=False,
             use_inter_loss=False,
-            use_mean_feat=False,
             triplet_instance_weight=1,
-            circle_weight=1,
-            unified_weight=1,
             num_features=256,
-            eps=0.1,
             loss_bbox=dict(type='L1Loss', loss_weight=1),
             loss_reid=dict(loss_weight=1.0),
+            gfn_config=dict(
+                use_gfn=USE_GFN,
+                gfn_mode='image',    # {'image', 'separate', 'combined'}
+                gfn_activation_mode='se',   # combined:{'se', 'sum', 'identity'}
+                gfn_filter_neg=True,
+                gfn_query_mode='batch', # {'batch', 'oim'}
+                gfn_use_image_lut=True,
+                gfn_train_temp=0.1,
+                gfn_se_temp=0.2,
+                gfn_num_sample=(1, 1),
+                emb_dim=2048,
+            )
             )
     )
 )
@@ -159,10 +169,10 @@ PSEUDO_LABELS = dict(
     search_type=0, # 0,1,2 for GPU, 3 for CPU (work for faiss)
     cluster_num=None,
     iters=2,
-    LAMBDA_SIM1=0.3,    # default: 0.3
-    LAMBDA_SIM2=0.1,
-    context_method='max',    # sum, max, zero
-    context_clip=True,
+    lambda_scene=0,    # default: 0.3
+    lambda_person=0.1,
+    context_method='scene',    # sum, max, zero
+    # context_clip=True,
     threshold=0.5,
     use_post_process=False,
     filter_threshold=0.2,
@@ -170,6 +180,7 @@ PSEUDO_LABELS = dict(
     use_k_reciprocal_nearest=False,
     part_feat=dict(use_part_feat=USE_PART_FEAT, 
                     global_weight=GLOBAL_WEIGHT,
+                    part_weight=(1 - GLOBAL_WEIGHT)/2,
                     uncertainty=UNCERTAINTY,
                     ),
     hard_mining=dict(use_hard_mining=HARD_MINING,

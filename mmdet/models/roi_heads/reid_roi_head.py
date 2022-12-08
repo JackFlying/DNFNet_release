@@ -187,16 +187,16 @@ class ReidRoIHead(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
             bbox_feats = F.adaptive_max_pool2d(bbox_feats, 1)   # [N, 2048, 1, 1]
 
         # if not self.use_global_Local_context:
-        scene_emb1, scene_emb2, gfn_losses = None, None, torch.tensor(0.)
+        scene_emb, scene_emb1, scene_emb2, gfn_losses = None, None, None, torch.tensor(0.)
         if self.use_gfn:
             scene_emb1 = F.adaptive_max_pool2d(x[0], 1).squeeze(-1).squeeze(-1) # x[0]=[N, 1024, H, W] => [N, 1024, 1, 1]
             if self.with_shared_head:
-                scene_emb_size = 56
-                scene_emb2 = F.adaptive_max_pool2d(x[0], scene_emb_size) # [N, 1024, scene_emb_size, scene_emb_size]
-                scene_emb2 = self.shared_head(scene_emb2) # 
-                scene_emb2 = F.adaptive_max_pool2d(scene_emb2, 1).squeeze(-1).squeeze(-1) # [N, 1024, 1, 1]
-        
-        cls_score, bbox_pred, id_pred, part_id_pred, scene_emb, query_embed = self.bbox_head(bbox_feats1, bbox_feats, part_feats1, part_feats, scene_emb1, scene_emb2) # [N, 256]
+                scene_emb2 = F.adaptive_max_pool2d(x[0], self.scene_emb_size) # [N, 1024, scene_emb_size, scene_emb_size]
+                scene_emb2 = self.shared_head(x[0])
+                scene_emb2 = F.adaptive_max_pool2d(scene_emb2, 1).squeeze(-1).squeeze(-1) # [N, 2048, 1, 1]
+                scene_emb = self.embedding_head({'feat_res4':scene_emb1, 'feat_res5':scene_emb2})[0]
+
+        cls_score, bbox_pred, id_pred, part_id_pred, _, query_embed = self.bbox_head(bbox_feats1, bbox_feats, part_feats1, part_feats, scene_emb1, scene_emb2, labels) # [N, 256]
         if self.use_gfn and self.training:
             gfn_losses = self.bbox_head.gfn_forward(scene_emb, query_embed, labels)
 

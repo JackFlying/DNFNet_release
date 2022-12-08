@@ -248,7 +248,6 @@ def generate_cluster_features(labels, features):
     centers = torch.stack(centers, dim=0)
     return centers
 
-
 def get_img_sim_by_max(inst_sim_matrix, split_num):
     """
         获得图片之间的相似度
@@ -448,6 +447,7 @@ def label_generator_FINCH_context_SpCL_Plus(cfg, features, cuda=True, indep_thre
     elif cfg.PSEUDO_LABELS.context_method == "scene":
         scene_features = torch.load("./saved_file/scene_features.pth")
         scene_sim = scene_features.mm(scene_features.t())
+        # print("scene_sim", scene_sim[:50][:50])
 
     # if cfg.PSEUDO_LABELS.context_clip:
     #     scene_sim = scene_sim * (scene_sim > cfg.PSEUDO_LABELS.threshold)
