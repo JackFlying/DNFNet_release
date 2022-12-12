@@ -8,6 +8,8 @@ from PIL import Image
 import pickle
 import re
 from tqdm import tqdm
+import torch
+import sys
 # from numba import jit
 
 from sklearn.metrics import average_precision_score
@@ -124,6 +126,8 @@ def main(det_thresh=0.05, gallery_size=-1, ignore_cam_id=True):
     data_root='/home/linhuadong/dataset/PRW'
     probe_set = load_probes(data_root)  # 2057
     gallery_set = gt_roidbs(data_root)  # 6112
+    # torch.save(probe_set, 'probe_set.pth')
+    # sys.exit()
 
     name_id = dict()
     for i, gallery in enumerate(gallery_set):
@@ -191,8 +195,8 @@ def search_performance_calc(gallery_set, probe_set, gallery_det, gallery_feat, p
     image_root = '/home/linhuadong/dataset/PRW/frames'
     ret = {'image_root': image_root, 'results': []}
     for i in tqdm(range(len(probe_set))):
-        # if i > 10:
-        #     break
+        if i > 10:
+            break
         y_true, y_score = [], []
         imgs, rois = [], []
         roi_feats = []
@@ -288,16 +292,18 @@ def search_performance_calc(gallery_set, probe_set, gallery_det, gallery_feat, p
                         'probe_gt': probe_gts,
                         'ap':ap, 
                         'acc':acc,
+                        'pid':probe_pid,
+                        
                         'gallery': []}
         # only save top-10 predictions
-        for k in range(10):
-            new_entry['gallery'].append({
-                'img': str(imgs[inds[k]]),
-                'roi': list(rois[inds[k]]),
-                'score': float(y_score[k]),
-                'correct': int(y_true[k]),
-                'roi_feats':roi_feats[inds[k]]
-            })
+        # for k in range(10):
+        #     new_entry['gallery'].append({
+        #         'img': str(imgs[inds[k]]),
+        #         'roi': list(rois[inds[k]]),
+        #         'score': float(y_score[k]),
+        #         'correct': int(y_true[k]),
+        #         'roi_feats':roi_feats[inds[k]],
+        #     })
         ret['results'].append(new_entry)
     
     with open('evaluate_result.pkl','wb') as f:

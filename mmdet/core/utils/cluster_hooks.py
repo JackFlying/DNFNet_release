@@ -104,7 +104,10 @@ class ClusterHook(Hook):
                     uncertainty = self.get_uncertainty_by_part(pseudo_labels, pseudo_label2s, memory_features)
                     if self.cfg.PSEUDO_LABELS.hard_mining.use_hard_mining:
                         pseudo_labels, label_mask = transfer_label_noise_to_outlier(uncertainty, pseudo_labels[0])
-
+                    
+                    # get_is_known_list(pseudo_labels[0]) # For pseudo labels
+                    get_is_known_list(give_unknown_id())  # For gt labels
+                    
                     # label_mask = outlier_mask(pseudo_labels[0])
                     # for iter in range(self.cfg.PSEUDO_LABELS.hard_mining.label_refine_iters):
                     #     print("iter", iter)
@@ -118,7 +121,7 @@ class ClusterHook(Hook):
                     #     uncertainty = self.get_uncertainty_by_part(update_pseudo_labels, update_pseudo_label2s)
                     #     pseudo_labels = update_pseudo_labels
                     #     pseudo_label2s = update_pseudo_label2s
-                    # torch.save(label_mask, os.path.join("saved_file", "label_mask.pth"))
+
                     torch.save(uncertainty, os.path.join("saved_file", "uncertainty.pth"))
 
             torch.save(pseudo_labels, os.path.join("saved_file", "pseudo_labels.pth"))
@@ -131,9 +134,8 @@ class ClusterHook(Hook):
             memory_labels.append(torch.LongTensor(labels) + start_pid)
             start_pid += max(labels) + 1
         memory_labels = torch.cat(memory_labels).view(-1)
-
-        if self.use_k_reciprocal_nearest:
-            uncertainty = re_ranking_for_instance(labels, memory_features, self.cfg.PSEUDO_LABELS.K)
+        # if self.use_k_reciprocal_nearest:
+        #     uncertainty = re_ranking_for_instance(labels, memory_features, self.cfg.PSEUDO_LABELS.K)
 
         if self.uncertainty_estimation:
             weight = 0.1
@@ -232,6 +234,28 @@ def outlier_mask(labels):
         if len(label_count[label]) == 1:
             mask[i] = False
     return mask
+
+def give_unknown_id():
+    gt_person_ids = torch.load(os.path.join("saved_file", "person_ids.pth"))
+    max_ids = gt_person_ids.max()
+    max_ids += 1
+    for i, label in enumerate(gt_person_ids):
+        if label.item() == -1:
+            gt_person_ids[i] = max_ids
+        max_ids +=1 
+    return gt_person_ids.tolist()
+
+def get_is_known_list(pseudo_label):
+    """
+        pseudo_label: list
+    """
+    label_num = collections.defaultdict(list)
+    for i, label in enumerate(pseudo_label):
+        label_num[label].append(i)    
+    is_known = torch.ones((len(pseudo_label))).bool()
+    for i, label in enumerate(pseudo_label):
+        is_known[i] = len(label_num[label]) > 1
+    torch.save(is_known, os.path.join("saved_file", "is_known.pth"))
 
 @torch.no_grad()
 def transfer_label_noise_to_outlier(uncertaintys, labels):

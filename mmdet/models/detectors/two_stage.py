@@ -83,6 +83,7 @@ class TwoStageDetector(BaseDetector):
         x = self.backbone(img)  # [1, 256, 216, 376], [1, 512, 108, 188], [1, 1024, 54, 94], [1, 2048, 27, 47]
         if self.with_neck:
             x = self.neck(x)    # [1, 1024, 54, 94]
+            x = [x[1]]
         return x
 
     def forward_dummy(self, img):

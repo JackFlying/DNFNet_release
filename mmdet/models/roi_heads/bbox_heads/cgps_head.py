@@ -13,6 +13,7 @@ from mmdet.models.losses import accuracy
 from mmdet.models.utils import HybridMemoryMultiFocalPercent, Quaduplet2Loss, CircleLoss, UnifiedLoss
 from .gfn import GalleryFilterNetwork
 from mmdet.models.utils.ProtoNorm import PrototypeNorm1d, register_targets_for_pn, convert_bn_to_pn
+import os
 
 @HEADS.register_module()
 class CGPSHead(nn.Module):
@@ -132,10 +133,14 @@ class CGPSHead(nn.Module):
         elif self.norm_type is 'protonorm':
             self.normalize = PrototypeNorm1d(256)
             self.normalize_part = nn.ModuleList([PrototypeNorm1d(256), PrototypeNorm1d(256)])
+            self.bgnormalize = nn.BatchNorm1d(256)
+            self.bgnormalize_part = nn.ModuleList([nn.BatchNorm1d(256), nn.BatchNorm1d(256)])   
         elif self.norm_type is 'batchnorm':
             self.normalize = nn.BatchNorm1d(256)
             self.normalize_part = nn.ModuleList([nn.BatchNorm1d(256), nn.BatchNorm1d(256)])
-        
+            self.bgnormalize = nn.BatchNorm1d(256)
+            self.bgnormalize_part = nn.ModuleList([nn.BatchNorm1d(256), nn.BatchNorm1d(256)])   
+    
         self.id_part_feature = nn.ModuleList([nn.Linear(in_channels, 128), nn.Linear(in_channels, 128)])
         self.id_part_feature1 = nn.ModuleList([nn.Linear(in_channels // 2, 128), nn.Linear(in_channels // 2, 128)])
         
@@ -165,37 +170,42 @@ class CGPSHead(nn.Module):
 
     def gfn_forward(self, scene_emb, query_emb, labels):
         id_labels, image_id,  person_id = labels[:, 1], labels[:, 2], labels[:, 3]
-        # filter bg
+
         query_emb = query_emb[id_labels!=-2]
         # person_id = self.loss_reid.get_cluster_ids(id_labels[id_labels!=-2])
-        person_id = person_id[id_labels!=-2]
+        person_id = person_id[id_labels!=-2]    # GT
         image_id = image_id[id_labels!=-2]
         unique_image_id = torch.unique(image_id)
         
-        target = []
-        query_embs = []
+        # is_known = torch.ones_like(person_id).bool()
+        # is_known[person_id == -1] = False
+        is_known = torch.load(os.path.join("saved_file", "is_known.pth"))
+        is_known = is_known[id_labels[id_labels!=-2]]
+
+        target, query_embs = [], []
         for ig_id in unique_image_id:
             mask = (image_id == ig_id)
-            
             mask_query_emb = query_emb[mask]
             mask_person_id = person_id[mask]
+            mask_is_known = is_known[mask]
             
             unique_person_id = torch.unique(mask_person_id)
             mask_ = torch.zeros_like(mask_person_id).bool()
             for ps_id in unique_person_id:
                 index = torch.nonzero(mask_person_id == ps_id)
-                mask_[index[0]] = True
+                if ps_id != -1:
+                    mask_[index[0]] = True
+                else:   # 保留所有unknow,可能unknow也会有重复,不好处理
+                    mask_[index] = True
 
             mask_person_id_ = mask_person_id[mask_]
             mask_query_emb_ = mask_query_emb[mask_]
+            mask_is_known_ = mask_is_known[mask_]
             query_embs.append(mask_query_emb_)
             
-            # 每个类只挑选出一个编号
-            is_known = torch.ones_like(mask_person_id_).bool()
-            # is_known[torch.randint(0, len(mask_person_id_), (1,))] = False
             target.append({
                 'person_id':mask_person_id_,
-                'is_known':is_known,
+                'is_known':mask_is_known_,
                 'image_id':ig_id
             })
 
@@ -240,20 +250,36 @@ class CGPSHead(nn.Module):
     @auto_fp16()
     def forward(self, x1, x, part_feats1, part_feats, scene_emb1, scene_emb2, labels):
         
-        if self.norm_type == 'protonorm' and self.training:
+        if self.norm_type in ['protonorm'] and self.training:
             id_labels = labels[:, 1]
             person_id = id_labels.clone()
             person_id[id_labels!=-2] = self.loss_reid.get_cluster_ids(id_labels[id_labels!=-2])
-            register_targets_for_pn(self.normalize, person_id.long())
-            register_targets_for_pn(self.normalize_part, person_id.long())
+            # register_targets_for_pn(self.normalize, person_id.long())
+            register_targets_for_pn(self.normalize, person_id[id_labels!=-2].long())
+            register_targets_for_pn(self.normalize_part, person_id[id_labels!=-2].long())
+        if self.norm_type in ['batchnorm'] and self.training:
+            id_labels = labels[:, 1]
 
         x = x.view(x.size(0), -1)
         x1 = x1.view(x1.size(0), -1)
         cls_score = self.fc_cls(x) if self.with_cls else None
         bbox_pred = self.fc_reg(x) if self.with_reg else None
-        id_pred = self.normalize(torch.cat((self.id_feature(x), self.id_feature1(x1)), axis=1))
-        scene_embed, query_embed = None, None
+        id_pred = torch.cat((self.id_feature(x), self.id_feature1(x1)), axis=1)
 
+        if self.norm_type in ['protonorm', 'batchnorm'] and self.training:
+            id_pred[id_labels!=-2] = self.normalize(id_pred[id_labels!=-2])
+            id_pred[id_labels==-2] = self.bgnormalize(id_pred[id_labels==-2])
+            
+            # id_pred = self.normalize(id_pred)
+            # torch.save(id_pred, "id_pred_pn2.pth")
+            # torch.save(id_labels, "id_labels_pn2.pth")
+            # torch.save(labels[:, 3], "gt_id_pn2.pth")
+            # import sys
+            # sys.exit()
+        else:
+            id_pred = self.normalize(id_pred)
+    
+        scene_embed, query_embed = None, None
         if self.use_gfn:
             query_embed = F.normalize(torch.cat((self.query_feature(x), self.query_feature1(x1)), axis=1))
             # scene_embed = F.normalize(torch.cat((self.scene_feature(scene_emb1), self.scene_feature1(scene_emb2)), axis=1))
@@ -266,7 +292,13 @@ class CGPSHead(nn.Module):
                 part_feat = part_feats[i]
                 part_feat1 = part_feat1.view(part_feat1.size(0), -1)
                 part_feat = part_feat.view(part_feat.size(0), -1)
-                id_feat = self.normalize_part[i](torch.cat((self.id_part_feature[i](part_feat), self.id_part_feature1[i](part_feat1)), axis=1))
+                id_feat = torch.cat((self.id_part_feature[i](part_feat), self.id_part_feature1[i](part_feat1)), axis=1)
+                if self.norm_type in ['protonorm', 'batchnorm'] and self.training:
+                    # id_feat = self.normalize_part[i](id_feat)
+                    id_feat[id_labels!=-2] = self.normalize_part[i](id_feat[id_labels!=-2])
+                    id_feat[id_labels==-2] = self.bgnormalize_part[i](id_feat[id_labels==-2])
+                else:
+                    id_feat = self.normalize_part[i](id_feat)
                 part_id_pred.append(id_feat)
             part_id_pred = torch.cat(part_id_pred, dim=1)   # [N, 512]
         return cls_score, bbox_pred, id_pred, part_id_pred, scene_embed, query_embed

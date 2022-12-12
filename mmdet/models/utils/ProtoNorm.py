@@ -37,14 +37,17 @@ class _PrototypeNorm(_BatchNorm):
             targets = self.target_prototypes.long().to(input.device)
             targets_unique = torch.unique(targets)
             prototypes = []
-            # # process unlabelled
+            # process unlabelled
             # for f, t in zip(input, targets):
-            #     if t == unlabel: prototypes.append(f)
+            #     if t == bg_label: prototypes.append(f)
 
             # process labelled
             for t in targets_unique:
                 if t != bg_label: prototypes.append(input[targets==t].mean([0]))
-            
+
+            # for t in targets_unique:
+            #     prototypes.append(input[targets==t].mean([0]))
+
             prototypes = torch.stack(prototypes)
             
             n = input.numel() / input.size(1)
