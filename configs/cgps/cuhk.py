@@ -30,7 +30,8 @@ model = dict(
             use_IoU_memory=False,
             use_uncertainty_loss=UNCERTAINTY,
             use_hard_mining=HARD_MINING,
-            norm_type='protonorm',    # ['l2norm', 'protonorm', 'batchnorm']
+            norm_type='batchnorm',    # ['l2norm', 'protonorm', 'batchnorm']
+            use_bn_affine=True,
             co_learning=CO_LEARNING,
             IoU_loss_clip=[0.7, 1.0],
             IoU_memory_clip=[0.05, 0.9],
@@ -192,7 +193,7 @@ PSEUDO_LABELS = dict(
 )
 # fp16 = dict(loss_scale=512.)
 workflow = [('train', 1)]
-evaluation = dict(start=None, interval=30, metric='bbox')
+evaluation = dict(start=4, interval=4, metric='bbox')
 testing = TEST
 save_features = True
 restart = False

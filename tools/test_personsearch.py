@@ -11,6 +11,7 @@ from mmcv import Config, DictAction
 from mmcv.cnn import fuse_conv_bn
 from mmcv.parallel import MMDataParallel, MMDistributedDataParallel
 from mmcv.runner import get_dist_info, init_dist, load_checkpoint
+from sklearn.preprocessing import normalize
 
 from mmdet.apis import multi_gpu_test
 from mmdet.core import wrap_fp16_model
@@ -47,7 +48,7 @@ def single_gpu_test(model,
             #print(batch_size)
             if result[0][0].shape[0]>0:
                 gboxes.append(result[0][0][:, :5])
-                gfeatures.append(result[0][0][:, 5:])
+                gfeatures.append(normalize(result[0][0][:, 5:]))
             else:
                 gboxes.append(np.zeros((0, 5), dtype=np.float32))
                 gfeatures.append(np.zeros((0, 256), dtype=np.float32))
@@ -94,9 +95,9 @@ def single_gpu_test(model,
             inters = w * h
             IoU = inters / (areas + area - inters)
             iou_i = np.argmax(IoU)
-            pfeatures.append(result[0][0][iou_i:iou_i+1, 5:])
+            pfeatures.append(normalize(result[0][0][iou_i:iou_i+1, 5:]))
         else:
-            pfeatures.append(result[0][0][:, 5:])
+            pfeatures.append(normalize(result[0][0][:, 5:]))
 
         for _ in range(batch_size):
             prog_bar.update()

@@ -3,7 +3,7 @@ _base_ = [
     '../_base_/datasets/coco_reid_unsup_prw.py',
     '../_base_/schedules/schedule_1x_reid_norm_base.py', '../_base_/default_runtime.py'
 ]
-TEST = True
+TEST = False
 USE_PART_FEAT = True
 GLOBAL_WEIGHT = 0.9
 CO_LEARNING = False
@@ -11,11 +11,11 @@ UNCERTAINTY = True
 HARD_MINING = True
 USE_GFN = False
 model = dict(
-    neck=dict(
-        type='FPN',
-        in_channels=[256, 512, 1024],
-        out_channels=1024,
-        num_outs=3),
+    # neck=dict(
+    #     type='FPN',
+    #     in_channels=[256, 512, 1024],
+    #     out_channels=1024,
+    #     num_outs=3),
     roi_head=dict(
         use_gfn=USE_GFN,
         use_RoI_Align_feat=False,
@@ -36,6 +36,7 @@ model = dict(
             use_uncertainty_loss=False,
             use_hard_mining=False,
             norm_type='protonorm',    # ['l2norm', 'protonorm', 'batchnorm']
+            use_bn_affine=False,
             co_learning=CO_LEARNING,
             IoU_loss_clip=[0.7, 1.0],
             IoU_memory_clip=[0.05, 0.9],

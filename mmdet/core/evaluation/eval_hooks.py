@@ -43,6 +43,8 @@ class EvalHook(Hook):
         self.log = log
         self.cfg = cfg
         self.initial_epoch_flag = True
+        if self.cfg.data_name == 'CUHK_SYSU':
+            self.dataset = PSDB("psdb_test", self.cfg.data_root)
 
     def before_train_epoch(self, runner):
         """Evaluate the model only at the start of training."""
@@ -93,10 +95,9 @@ class EvalHook(Hook):
             evaluate_search_prw(results, det_thresh=0.5, epoch=runner.epoch, log=self.log)
         else:
             gboxes, gfeatures, pfeatures = results
-            dataset = PSDB("psdb_test", self.cfg.data_root)
-            evaluate_detections(dataset, gboxes, threshold=0.5)
-            evaluate_detections(dataset, gboxes, threshold=0.5, labeled_only=True)
-            evaluate_search_nae(dataset, gboxes, gfeatures, pfeatures, threshold=0.5, gallery_size=100, epoch=runner.epoch, log=self.log)
+            evaluate_detections(self.dataset, gboxes, threshold=0.5)
+            evaluate_detections(self.dataset, gboxes, threshold=0.5, labeled_only=True)
+            evaluate_search_nae(self.dataset, gboxes, gfeatures, pfeatures, threshold=0.5, gallery_size=100, epoch=runner.epoch, log=self.log)
 
 
 class DistEvalHook(EvalHook):

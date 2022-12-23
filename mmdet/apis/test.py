@@ -11,6 +11,7 @@ import mmcv
 import torch
 import torch.distributed as dist
 from mmcv.runner import get_dist_info
+from sklearn.preprocessing import normalize
 
 from mmdet.core import encode_mask_results, tensor2imgs
 
@@ -36,7 +37,7 @@ def single_gpu_test_cuhk(model,
             batch_size = len(result)
             if result[0][0].shape[0]>0:
                 gboxes.append(result[0][0][:, :5])
-                gfeatures.append(result[0][0][:, 5:])
+                gfeatures.append(normalize(result[0][0][:, 5:5+256]))
             else:
                 gboxes.append(np.zeros((0, 5), dtype=np.float32))
                 gfeatures.append(np.zeros((0, 256), dtype=np.float32))
@@ -88,9 +89,9 @@ def single_gpu_test_cuhk(model,
             inters = w * h
             IoU = inters / (areas + area - inters)
             iou_i = np.argmax(IoU)
-            pfeatures.append(result[0][0][iou_i:iou_i+1, 5:])
+            pfeatures.append(normalize(result[0][0][iou_i:iou_i+1, 5:5+256]))
         else:
-            pfeatures.append(result[0][0][:, 5:])
+            pfeatures.append(normalize(result[0][0][:, 5:5+256]))
 
         for _ in range(batch_size):
             prog_bar.update()

@@ -61,29 +61,48 @@ class HM_part(autograd.Function):
         bottom_IoU = torch.clamp(bottom_IoU, min=IoU_memory_clip[0], max=IoU_memory_clip[1])
         top_IoU = torch.clamp(top_IoU, min=IoU_memory_clip[0], max=IoU_memory_clip[1])
         for x, y, b, t, iou, biou, tiou in zip(inputs, indexes, bottom_inputs, top_inputs, IoU, bottom_IoU, top_IoU):
+            
+            # 1. momentum update
             # ctx.features[y] = ctx.momentum * ctx.features[y] + (1.0 - ctx.momentum) * x
             # ctx.bottom_features[y] = ctx.momentum * ctx.bottom_features[y] + (1.0 - ctx.momentum) * b
             # ctx.top_features[y] = ctx.momentum * ctx.top_features[y] + (1.0 - ctx.momentum) * t
-            
-            # # 1. 
-            # ctx.features[y] = (1 - iou) * ctx.features[y] + iou * x
-            # ctx.bottom_features[y] = ctx.momentum * ctx.bottom_features[y] + (1.0 - ctx.momentum) * b
-            # ctx.top_features[y] = ctx.momentum * ctx.top_features[y] + (1.0 - ctx.momentum) * t
 
-            # 2. 
-            # ctx.features[y] = (1 - iou) * ctx.features[y] + iou * x
-            # ctx.bottom_features[y] = (1 - iou) * ctx.bottom_features[y] + iou * b
-            # ctx.top_features[y] = (1 - iou) * ctx.top_features[y] + iou * t
-
-            # 3.
+            # 2. IoU update
             ctx.features[y] = (1 - iou) * ctx.features[y] + iou * x
             ctx.bottom_features[y] = (1 - biou) * ctx.bottom_features[y] + biou * b
             ctx.top_features[y] = (1 - tiou) * ctx.top_features[y] + tiou * t
+
+            # 3. sim update
+            # sim = ctx.features[y].unsqueeze(0).mm(x.unsqueeze(1))
+            # bsim = ctx.bottom_features[y].unsqueeze(0).mm(b.unsqueeze(1))
+            # tsim = ctx.top_features[y].unsqueeze(0).mm(t.unsqueeze(1))
+            # sim = torch.clamp(sim, min=IoU_memory_clip[0], max=IoU_memory_clip[1])
+            # bsim = torch.clamp(bsim, min=IoU_memory_clip[0], max=IoU_memory_clip[1])
+            # tsim = torch.clamp(tsim, min=IoU_memory_clip[0], max=IoU_memory_clip[1])
+            # ctx.features[y] = sim * ctx.features[y] + (1 - sim) * x
+            # ctx.bottom_features[y] = bsim * ctx.bottom_features[y] + (1 - bsim) * b
+            # ctx.top_features[y] = tsim * ctx.top_features[y] + (1 - tsim) * t
+            
+            # 4.AMU
+            # sim_x = ctx.features[y].unsqueeze(0).mm(x.unsqueeze(1)).squeeze()
+            # other_feats = torch.cat([ctx.features[:y], ctx.features[y+1:]],dim=0)
+            # sim_feats = ctx.features[y].unsqueeze(0).mm(other_feats.t())
+            # hard_feats_sim = torch.max(sim_feats)
+            # soft_sim = F.softmax(torch.stack([sim_x, hard_feats_sim]) / 0.03)
+            # ctx.features[y] = soft_sim[1] * ctx.features[y] + soft_sim[0] * x
+            # ctx.bottom_features[y] = soft_sim[1] * ctx.bottom_features[y] + soft_sim[0] * b
+            # ctx.top_features[y] = soft_sim[1] * ctx.top_features[y] + soft_sim[0] * t
+            
+            # # 5.random
+            # momentum = torch.rand((1,)).to(x.device)
+            # momentum = torch.clamp(momentum, min=IoU_memory_clip[0], max=IoU_memory_clip[1])
+            # ctx.features[y] = (1 - momentum) * ctx.features[y] + momentum * x
+            # ctx.bottom_features[y] = (1 - momentum) * ctx.bottom_features[y] + momentum * b
+            # ctx.top_features[y] = (1 - momentum) * ctx.top_features[y] + momentum * t
             
             ctx.features[y] /= ctx.features[y].norm()
             ctx.bottom_features[y] /= ctx.bottom_features[y].norm()
             ctx.top_features[y] /= ctx.top_features[y].norm()
-            
             ctx.mIoU[y] = ctx.IoU_momentum * ctx.mIoU[y] + (1.0 - ctx.IoU_momentum) * iou
 
         return grad_inputs, grad_bottom_outputs, grad_top_outputs, None, None, None, None, None, None, None, None, None, None, None
@@ -282,6 +301,166 @@ class HybridMemoryMultiFocalPercent(nn.Module):
         masked_sums = masked_exps.sum(dim, keepdim=True) + epsilon
         return masked_exps / masked_sums    # softmax
 
+    def get_hard_cluster_loss(self, labels, cluster_inputs, targets, IoU, indexes):
+        """
+            :cluster_inputs: [B, N]
+            :targets: [B]
+            :labels: [N]
+        """
+        B = cluster_inputs.shape[0]
+
+        # if self.hard_mining:    # 聚类中心不能考虑难样本
+        #     files_path = self.load_uncertainty()
+        #     uncertainty = torch.load(files_path).cuda()
+        #     cluster_inputs = cluster_inputs * uncertainty.unsqueeze(0)
+        #     labels[uncertainty == 0] = labels.max() + 1
+
+        #     sim_ = torch.zeros(labels.max() + 1, B).float().cuda() # C * B, unique label num: C = labels.max() + 1表示标签的数量
+        #     sim_.index_add_(0, labels, cluster_inputs.t().contiguous())  # 每一列表示minibatch中instance与同一个簇中所有instance的相似度的和
+        #     nums_ = torch.zeros(labels.max() + 1, 1).float().cuda() # many instances belong to a cluster, so calculate the number of instances in a cluster
+        #     nums_.index_add_(0, labels, torch.ones(self.num_memory, 1).float().cuda()) # C * 1
+        #     sim = sim_[:-1].clone()
+        #     nums = nums_[:-1].clone()
+        # else:
+        sim = torch.zeros(labels.max() + 1, B).float().cuda() # C * B, unique label num: C = labels.max() + 1表示标签的数量
+        sim.index_add_(0, labels, cluster_inputs.t().contiguous())  # 每一列表示minibatch中instance与同一个簇中所有instance的相似度的和
+        nums = torch.zeros(labels.max() + 1, 1).float().cuda() # many instances belong to a cluster, so calculate the number of instances in a cluster
+        self.num_memory = labels.shape[0]
+        nums.index_add_(0, labels, torch.ones(self.num_memory, 1).float().cuda()) # C * 1
+        
+        mask = (nums > 0).float()
+        sim /= (mask * nums + (1 - mask)).clone().expand_as(sim) # average features in each cluster, C * B, 与聚类中心的相似度
+        mask = mask.expand_as(sim)
+        masked_sim = self.masked_softmax_multi_focal(sim.t().contiguous(), mask.t().contiguous(), targets=targets, IoU=IoU, indexes=indexes, labels=labels) # sim: u * B, mask:u * B, masked_sim: B * u
+        cluster_hard_loss = F.nll_loss(torch.log(masked_sim + 1e-6), targets, reduce=False)
+        
+        # label_mask = torch.load(os.path.join('saved_file', 'label_mask.pth')).cuda()
+        # target_label_mask = label_mask[indexes]
+        # cluster_hard_loss = cluster_hard_loss * target_label_mask
+        cluster_hard_loss = cluster_hard_loss.mean()
+        
+        return cluster_hard_loss
+
+    def forward(self, feats, indexes, IoU, part_feats, top_IoU, bottom_IoU):
+        """
+            :inputs: [B, 256]
+            :indexes: [B, ]
+            :IoU: [B, ]
+            :cls_score_pos: [B, ]
+            :bbox_targets: [B, 256]
+        """
+        losses = {}
+        targets = self.labels[indexes].clone()
+        labels = self.labels.clone() # [N, ]
+        
+        inputs = F.normalize(feats, p=2, dim=1)
+        if self.use_part_feat:
+            bottom_inputs = F.normalize(part_feats[:, :256], p=2, dim=1)
+            top_inputs = F.normalize(part_feats[:, 256:], p=2, dim=1)
+            inputs, bottom_inputs, top_inputs = hm_part(inputs, bottom_inputs, top_inputs, indexes, self.features, self.bottom_features, \
+                                                self.top_features, self.mIoU, self.momentum, self.IoU_momentum, IoU, top_IoU, \
+                                                bottom_IoU, self.IoU_memory_clip)   # [B, N]
+            # inputs_ = inputs[:, indexes].diag()
+            # memory_similarity = inputs_.mean().detach()
+            # losses['memory_similarity'] = memory_similarity
+            inputs, bottom_inputs, top_inputs = inputs / self.temp, bottom_inputs / self.temp, top_inputs / self.temp
+        else:
+            inputs = hm(inputs, indexes, self.features, self.mIoU, IoU, self.momentum, self.IoU_momentum)   # [B, N]
+            inputs /= self.temp
+
+        # dialog = torch.eye(inputs.shape[0]).bool().cuda()
+
+        # cluster_inputs = inputs # [B, N]
+        # if self.use_IoU_memory:
+        #     input_t = inputs.t()    # [N, B]
+        #     IoU_weight = self.foreground_weight * self.mIoU + (1 - self.foreground_weight) * (1 - self.mIoU)
+        #     # clip_IoU = torch.clamp(self.mIoU.detach(), self.IoU_memory_clip[0], self.IoU_memory_clip[1])    # [N, ]
+        #     cluster_inputs = input_t * IoU_weight.unsqueeze(1)    # [N, B] * [N, ] = [N, B]
+        #     cluster_inputs = cluster_inputs.t() # [B, N]
+
+        # label_mask = torch.load(os.path.join('saved_file', 'label_mask.pth')).cuda()
+        # target_label_mask = label_mask[indexes]
+        # labels = labels[label_mask]
+        # inputs = inputs[target_label_mask]
+        # inputs = inputs.t()[label_mask].t()
+        # bottom_inputs = bottom_inputs[target_label_mask]
+        # bottom_inputs = bottom_inputs.t()[label_mask].t()
+        # top_inputs = top_inputs[target_label_mask]
+        # top_inputs = top_inputs.t()[label_mask].t()
+        # targets = targets[target_label_mask]
+        
+        if self.use_cluster_hard_loss:
+            losses["global_cluster_hard_loss"] = torch.tensor(0.)
+            losses["part_cluster_hard_loss"] = torch.tensor(0.)
+            if targets.shape[0] > 0:
+                losses["global_cluster_hard_loss"] = self.get_hard_cluster_loss(labels.clone(), inputs, targets, IoU, indexes)
+                if self.use_part_feat:
+                    bottom_cluster_hard_loss = self.get_hard_cluster_loss(labels.clone(), bottom_inputs, targets, bottom_IoU, indexes)
+                    top_cluster_hard_loss = self.get_hard_cluster_loss(labels.clone(), top_inputs, targets, top_IoU, indexes)
+                    losses["part_cluster_hard_loss"] = bottom_cluster_hard_loss + top_cluster_hard_loss
+            
+
+        if self.use_instance_hard_loss:
+            losses["instance_hard_loss"] = self.get_all_hard_instance_loss(inputs, labels, targets)
+
+        if self.use_hybrid_loss:
+            B = inputs.size(0)
+            targets = self.labels[indexes].clone()
+            labels = self.labels.clone() # shape: N
+            sim = torch.zeros(labels.max() + 1, B).float().cuda() # u * B, unique label num: u = labels.max() + 1表示标签的数量
+            sim.index_add_(0, labels, inputs.t().contiguous())  # 每一列表示minibatch中instance与同一个簇中所有instance的相似度的和
+            nums = torch.zeros(labels.max() + 1, 1).float().cuda() # many instances belong to a cluster, so calculate the number of instances in a cluster
+            nums.index_add_(0, labels, torch.ones(self.num_memory, 1).float().cuda()) # u * 1
+            mask = (nums > 0).float()
+            sim /= (mask * nums + (1 - mask)).clone().expand_as(sim) # average features in each cluster, u * B, 与聚类中心的相似度
+            mask = mask.expand_as(sim)
+            hybrid_loss = self.get_hybrid_loss(inputs, labels, targets, sim.t().contiguous(), mask.t().contiguous()) # sim: u * B, mask:u * B, masked_sim: B * u
+            losses["hybrid_loss"] = hybrid_loss
+
+        return losses
+
+    # def get_hard_cluster_loss_by_two_pseudo_labels(self, label1s, label2s, cluster_inputs, targets, target2s, IoU, indexes, features):
+    #     """
+    #         cluster_inputs: [B, N]
+    #     """
+    #     B = cluster_inputs.shape[0]
+    #     # label1s = label1s.unsqueeze(0).repeat(B, 1)  # [B, N]
+    #     # pseudo1_pos = (label1s == targets.unsqueeze(-1))    # labels: [B, N], targets:[B, 1], pseudo1_pos: [B, N]
+    #     # label2s = label2s.unsqueeze(0).repeat(B, 1)  # [B, N]
+    #     # pseudo2_pos = (label2s == target2s.unsqueeze(-1))    # labels: [B, N], targets:[B, 1], pseudo1_pos: [B, N]
+    #     # complementary_pseudo_pos = pseudo1_pos ^ pseudo2_pos    # 补集
+    #     # # 修改正样本簇补集元素为labels.max() + 1, 对比学习不考虑这些样本
+    #     # label1s[complementary_pseudo_pos == True] = label1s.max() + 1
+
+    #     sim_ = torch.zeros(label1s.max() + 1, B).float().cuda() # C * B, unique label num: C = labels.max() + 1表示标签的数量
+    #     sim_.index_add_(0, label1s, cluster_inputs.t().contiguous())  # 每一列表示minibatch中instance与同一个簇中所有instance的相似度的和
+    #     nums_ = torch.zeros(label1s.max() + 1, 1).float().cuda() # many instances belong to a cluster, so calculate the number of instances in a cluster
+    #     nums_.index_add_(0, label1s, torch.ones(self.num_memory, 1).float().cuda()) # C * 1
+    #     sim = sim_[:-1].clone()
+    #     nums = nums_[:-1].clone()
+
+    #     mask = (nums > 0).float()
+    #     sim /= (mask * nums + (1 - mask)).clone().expand_as(sim) # average features in each cluster, C * B, 与聚类中心的相似度
+    #     mask = mask.expand_as(sim)
+    #     masked_sim = self.masked_softmax_multi_focal(sim.t().contiguous(), mask.t().contiguous(), targets=targets, IoU=IoU, indexes=indexes, labels=label1s) # sim: u * B, mask:u * B, masked_sim: B * u
+    #     cluster_hard_loss = F.nll_loss(torch.log(masked_sim + 1e-6), targets, reduce=False)
+
+    #     # features: [N, 256]
+    #     cluster_center = torch.zeros(label1s.max() + 1, features.shape[-1]).float().cuda()  # [C, 256]
+    #     cluster_center.index_add_(0, label1s, features.contiguous())  # 每一列表示minibatch中instance与同一个簇中所有instance的相似度的和
+    #     nums_ = torch.zeros(label1s.max() + 1, 1).float().cuda() # many instances belong to a cluster, so calculate the number of instances in a cluster
+    #     nums_.index_add_(0, label1s, torch.ones(self.num_memory, 1).float().cuda()) # C * 1
+    #     mask = (nums > 0).float()
+    #     cluster_center /= (mask * nums + (1 - mask)).clone().expand_as(cluster_center) # average features in each cluster, C * B, 与聚类中心的相似度
+
+    #     cluster_center2 = torch.zeros(label2s.max() + 1, features.shape[-1]).float().cuda()  # [C, 256]
+    #     cluster_center2.index_add_(0, label2s, features.contiguous())  # 每一列表示minibatch中instance与同一个簇中所有instance的相似度的和
+    #     mask = (nums > 0).float()
+    #     cluster_center2 /= (mask * nums + (1 - mask)).clone().expand_as(cluster_center2) # average features in each cluster, C * B, 与聚类中心的相似度
+
+    #     cluster_hard_loss = cluster_hard_loss.mean()
+    #     return cluster_hard_loss
+
     # def get_all_hard_instance_loss(self, inputs, labels, targets, epsilon=1e-6):
     #     B = inputs.size(0)
     #     num_classes = labels.max() + 1
@@ -376,159 +555,3 @@ class HybridMemoryMultiFocalPercent(nn.Module):
     #     sim_sum_softmax = sim_exp / sim_sum
     #     hybrid_loss = F.nll_loss(torch.log(sim_sum_softmax + epsilon), targets)
     #     return hybrid_loss
-
-    def get_hard_cluster_loss(self, labels, cluster_inputs, targets, IoU, indexes):
-        """
-            :cluster_inputs: [B, N]
-            :targets: [B]
-            :labels: [N]
-        """
-        B = cluster_inputs.shape[0]
-
-        # if self.hard_mining:    # 聚类中心不能考虑难样本
-        #     files_path = self.load_uncertainty()
-        #     uncertainty = torch.load(files_path).cuda()
-        #     cluster_inputs = cluster_inputs * uncertainty.unsqueeze(0)
-        #     labels[uncertainty == 0] = labels.max() + 1
-
-        #     sim_ = torch.zeros(labels.max() + 1, B).float().cuda() # C * B, unique label num: C = labels.max() + 1表示标签的数量
-        #     sim_.index_add_(0, labels, cluster_inputs.t().contiguous())  # 每一列表示minibatch中instance与同一个簇中所有instance的相似度的和
-        #     nums_ = torch.zeros(labels.max() + 1, 1).float().cuda() # many instances belong to a cluster, so calculate the number of instances in a cluster
-        #     nums_.index_add_(0, labels, torch.ones(self.num_memory, 1).float().cuda()) # C * 1
-        #     sim = sim_[:-1].clone()
-        #     nums = nums_[:-1].clone()
-        # else:
-        sim = torch.zeros(labels.max() + 1, B).float().cuda() # C * B, unique label num: C = labels.max() + 1表示标签的数量
-        sim.index_add_(0, labels, cluster_inputs.t().contiguous())  # 每一列表示minibatch中instance与同一个簇中所有instance的相似度的和
-        nums = torch.zeros(labels.max() + 1, 1).float().cuda() # many instances belong to a cluster, so calculate the number of instances in a cluster
-        self.num_memory = labels.shape[0]
-        nums.index_add_(0, labels, torch.ones(self.num_memory, 1).float().cuda()) # C * 1
-        
-        mask = (nums > 0).float()
-        sim /= (mask * nums + (1 - mask)).clone().expand_as(sim) # average features in each cluster, C * B, 与聚类中心的相似度
-        mask = mask.expand_as(sim)
-        masked_sim = self.masked_softmax_multi_focal(sim.t().contiguous(), mask.t().contiguous(), targets=targets, IoU=IoU, indexes=indexes, labels=labels) # sim: u * B, mask:u * B, masked_sim: B * u
-        cluster_hard_loss = F.nll_loss(torch.log(masked_sim + 1e-6), targets, reduce=False)
-        
-        # label_mask = torch.load(os.path.join('saved_file', 'label_mask.pth')).cuda()
-        # target_label_mask = label_mask[indexes]
-        # cluster_hard_loss = cluster_hard_loss * target_label_mask
-        cluster_hard_loss = cluster_hard_loss.mean()
-        
-        return cluster_hard_loss
-
-    def get_hard_cluster_loss_by_two_pseudo_labels(self, label1s, label2s, cluster_inputs, targets, target2s, IoU, indexes, features):
-        """
-            cluster_inputs: [B, N]
-        """
-        B = cluster_inputs.shape[0]
-        # label1s = label1s.unsqueeze(0).repeat(B, 1)  # [B, N]
-        # pseudo1_pos = (label1s == targets.unsqueeze(-1))    # labels: [B, N], targets:[B, 1], pseudo1_pos: [B, N]
-        # label2s = label2s.unsqueeze(0).repeat(B, 1)  # [B, N]
-        # pseudo2_pos = (label2s == target2s.unsqueeze(-1))    # labels: [B, N], targets:[B, 1], pseudo1_pos: [B, N]
-        # complementary_pseudo_pos = pseudo1_pos ^ pseudo2_pos    # 补集
-        # # 修改正样本簇补集元素为labels.max() + 1, 对比学习不考虑这些样本
-        # label1s[complementary_pseudo_pos == True] = label1s.max() + 1
-
-        sim_ = torch.zeros(label1s.max() + 1, B).float().cuda() # C * B, unique label num: C = labels.max() + 1表示标签的数量
-        sim_.index_add_(0, label1s, cluster_inputs.t().contiguous())  # 每一列表示minibatch中instance与同一个簇中所有instance的相似度的和
-        nums_ = torch.zeros(label1s.max() + 1, 1).float().cuda() # many instances belong to a cluster, so calculate the number of instances in a cluster
-        nums_.index_add_(0, label1s, torch.ones(self.num_memory, 1).float().cuda()) # C * 1
-        sim = sim_[:-1].clone()
-        nums = nums_[:-1].clone()
-
-        mask = (nums > 0).float()
-        sim /= (mask * nums + (1 - mask)).clone().expand_as(sim) # average features in each cluster, C * B, 与聚类中心的相似度
-        mask = mask.expand_as(sim)
-        masked_sim = self.masked_softmax_multi_focal(sim.t().contiguous(), mask.t().contiguous(), targets=targets, IoU=IoU, indexes=indexes, labels=label1s) # sim: u * B, mask:u * B, masked_sim: B * u
-        cluster_hard_loss = F.nll_loss(torch.log(masked_sim + 1e-6), targets, reduce=False)
-
-        # features: [N, 256]
-        cluster_center = torch.zeros(label1s.max() + 1, features.shape[-1]).float().cuda()  # [C, 256]
-        cluster_center.index_add_(0, label1s, features.contiguous())  # 每一列表示minibatch中instance与同一个簇中所有instance的相似度的和
-        nums_ = torch.zeros(label1s.max() + 1, 1).float().cuda() # many instances belong to a cluster, so calculate the number of instances in a cluster
-        nums_.index_add_(0, label1s, torch.ones(self.num_memory, 1).float().cuda()) # C * 1
-        mask = (nums > 0).float()
-        cluster_center /= (mask * nums + (1 - mask)).clone().expand_as(cluster_center) # average features in each cluster, C * B, 与聚类中心的相似度
-
-        cluster_center2 = torch.zeros(label2s.max() + 1, features.shape[-1]).float().cuda()  # [C, 256]
-        cluster_center2.index_add_(0, label2s, features.contiguous())  # 每一列表示minibatch中instance与同一个簇中所有instance的相似度的和
-        mask = (nums > 0).float()
-        cluster_center2 /= (mask * nums + (1 - mask)).clone().expand_as(cluster_center2) # average features in each cluster, C * B, 与聚类中心的相似度
-
-        cluster_hard_loss = cluster_hard_loss.mean()
-        return cluster_hard_loss
-
-    def forward(self, feats, indexes, IoU, part_feats, top_IoU, bottom_IoU):
-        """
-            :inputs: [B, 256]
-            :indexes: [B, ]
-            :IoU: [B, ]
-            :cls_score_pos: [B, ]
-            :bbox_targets: [B, 256]
-        """
-        inputs = F.normalize(feats, p=2, dim=1)
-        if self.use_part_feat:
-            bottom_inputs = F.normalize(part_feats[:, :256], p=2, dim=1)
-            top_inputs = F.normalize(part_feats[:, 256:], p=2, dim=1)
-            inputs, bottom_inputs, top_inputs = hm_part(inputs, bottom_inputs, top_inputs, indexes, self.features, self.bottom_features, \
-                                                self.top_features, self.mIoU, self.momentum, self.IoU_momentum, IoU, top_IoU, \
-                                                bottom_IoU, self.IoU_memory_clip)   # [B, N]
-            inputs, bottom_inputs, top_inputs = inputs / self.temp, bottom_inputs / self.temp, top_inputs / self.temp
-        else:
-            inputs = hm(inputs, indexes, self.features, self.mIoU, IoU, self.momentum, self.IoU_momentum)   # [B, N]
-            inputs /= self.temp
-
-        losses = {}
-        targets = self.labels[indexes].clone()
-        labels = self.labels.clone() # [N, ]
-
-
-        # cluster_inputs = inputs # [B, N]
-        # if self.use_IoU_memory:
-        #     input_t = inputs.t()    # [N, B]
-        #     IoU_weight = self.foreground_weight * self.mIoU + (1 - self.foreground_weight) * (1 - self.mIoU)
-        #     # clip_IoU = torch.clamp(self.mIoU.detach(), self.IoU_memory_clip[0], self.IoU_memory_clip[1])    # [N, ]
-        #     cluster_inputs = input_t * IoU_weight.unsqueeze(1)    # [N, B] * [N, ] = [N, B]
-        #     cluster_inputs = cluster_inputs.t() # [B, N]
-
-        # label_mask = torch.load(os.path.join('saved_file', 'label_mask.pth')).cuda()
-        # target_label_mask = label_mask[indexes]
-        # labels = labels[label_mask]
-        # inputs = inputs[target_label_mask]
-        # inputs = inputs.t()[label_mask].t()
-        # bottom_inputs = bottom_inputs[target_label_mask]
-        # bottom_inputs = bottom_inputs.t()[label_mask].t()
-        # top_inputs = top_inputs[target_label_mask]
-        # top_inputs = top_inputs.t()[label_mask].t()
-        # targets = targets[target_label_mask]
-        
-        if self.use_cluster_hard_loss:
-            losses["global_cluster_hard_loss"] = torch.tensor(0.)
-            losses["part_cluster_hard_loss"] = torch.tensor(0.)
-            if targets.shape[0] > 0:
-                losses["global_cluster_hard_loss"] = self.get_hard_cluster_loss(labels.clone(), inputs, targets, IoU, indexes)
-                if self.use_part_feat:
-                    bottom_cluster_hard_loss = self.get_hard_cluster_loss(labels.clone(), bottom_inputs, targets, bottom_IoU, indexes)
-                    top_cluster_hard_loss = self.get_hard_cluster_loss(labels.clone(), top_inputs, targets, top_IoU, indexes)
-                    losses["part_cluster_hard_loss"] = bottom_cluster_hard_loss + top_cluster_hard_loss
-            
-
-        if self.use_instance_hard_loss:
-            losses["instance_hard_loss"] = self.get_all_hard_instance_loss(inputs, labels, targets)
-
-        if self.use_hybrid_loss:
-            B = inputs.size(0)
-            targets = self.labels[indexes].clone()
-            labels = self.labels.clone() # shape: N
-            sim = torch.zeros(labels.max() + 1, B).float().cuda() # u * B, unique label num: u = labels.max() + 1表示标签的数量
-            sim.index_add_(0, labels, inputs.t().contiguous())  # 每一列表示minibatch中instance与同一个簇中所有instance的相似度的和
-            nums = torch.zeros(labels.max() + 1, 1).float().cuda() # many instances belong to a cluster, so calculate the number of instances in a cluster
-            nums.index_add_(0, labels, torch.ones(self.num_memory, 1).float().cuda()) # u * 1
-            mask = (nums > 0).float()
-            sim /= (mask * nums + (1 - mask)).clone().expand_as(sim) # average features in each cluster, u * B, 与聚类中心的相似度
-            mask = mask.expand_as(sim)
-            hybrid_loss = self.get_hybrid_loss(inputs, labels, targets, sim.t().contiguous(), mask.t().contiguous()) # sim: u * B, mask:u * B, masked_sim: B * u
-            losses["hybrid_loss"] = hybrid_loss
-
-        return losses

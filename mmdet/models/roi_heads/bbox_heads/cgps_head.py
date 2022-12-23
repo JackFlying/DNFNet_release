@@ -62,6 +62,7 @@ class CGPSHead(nn.Module):
                  use_instance_loss=True,
                  use_inter_loss=False,
                  co_learning=False,
+                 use_bn_affine=False,
                  co_learning_weight=0.5,
                  use_hard_mining=False,
                  global_weight=0.9,
@@ -107,6 +108,7 @@ class CGPSHead(nn.Module):
         self.co_learning_weight = co_learning_weight
         self.use_gfn = gfn_config['use_gfn']
         self.norm_type = norm_type   # ['l2norm', 'protonorm', 'batchnorm']
+        self.use_bn_affine = use_bn_affine
 
         in_channels = self.in_channels
         if self.with_avg_pool:
@@ -136,10 +138,12 @@ class CGPSHead(nn.Module):
             self.bgnormalize = nn.BatchNorm1d(256)
             self.bgnormalize_part = nn.ModuleList([nn.BatchNorm1d(256), nn.BatchNorm1d(256)])   
         elif self.norm_type is 'batchnorm':
-            self.normalize = nn.BatchNorm1d(256)
-            self.normalize_part = nn.ModuleList([nn.BatchNorm1d(256), nn.BatchNorm1d(256)])
-            self.bgnormalize = nn.BatchNorm1d(256)
-            self.bgnormalize_part = nn.ModuleList([nn.BatchNorm1d(256), nn.BatchNorm1d(256)])   
+            self.normalize = nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine)
+            self.normalize_part = nn.ModuleList([nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine), \
+                                                nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine)])
+            self.bgnormalize = nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine)
+            self.bgnormalize_part = nn.ModuleList([nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine), \
+                                    nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine)])
     
         self.id_part_feature = nn.ModuleList([nn.Linear(in_channels, 128), nn.Linear(in_channels, 128)])
         self.id_part_feature1 = nn.ModuleList([nn.Linear(in_channels // 2, 128), nn.Linear(in_channels // 2, 128)])
@@ -269,11 +273,11 @@ class CGPSHead(nn.Module):
         if self.norm_type in ['protonorm', 'batchnorm'] and self.training:
             id_pred[id_labels!=-2] = self.normalize(id_pred[id_labels!=-2])
             id_pred[id_labels==-2] = self.bgnormalize(id_pred[id_labels==-2])
-            
+
             # id_pred = self.normalize(id_pred)
-            # torch.save(id_pred, "id_pred_pn2.pth")
-            # torch.save(id_labels, "id_labels_pn2.pth")
-            # torch.save(labels[:, 3], "gt_id_pn2.pth")
+            # torch.save(id_pred, "id_pred_pn6.pth")
+            # torch.save(id_labels, "id_labels_pn6.pth")
+            # torch.save(labels[:, 3], "gt_id_pn6.pth")
             # import sys
             # sys.exit()
         else:
