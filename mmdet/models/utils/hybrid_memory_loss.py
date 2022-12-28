@@ -22,11 +22,11 @@ from torch.cuda.amp import custom_fwd, custom_bwd
 class HM_part(autograd.Function):
     @staticmethod
     @custom_fwd(cast_inputs=torch.float32)
-    def forward(ctx, inputs, bottom_inputs, top_inputs, indexes, features, bottom_features, top_features, mIoU, \
+    def forward(ctx, inputs, bottom_inputs, top_inputs, indexes, features, bottom_features, top_features, update_times, \
                     IoU, top_IoU, bottom_IoU, momentum, IoU_momentum, IoU_memory_clip):
         ctx.features = features
         ctx.momentum = momentum
-        ctx.mIoU = mIoU
+        ctx.update_times = update_times
         ctx.IoU_momentum = IoU_momentum
         ctx.bottom_features = bottom_features
         ctx.top_features = top_features
@@ -56,16 +56,19 @@ class HM_part(autograd.Function):
             grad_inputs = grad_outputs.mm(ctx.features)
             grad_bottom_outputs = grad_bottom_outputs.mm(ctx.bottom_features)
             grad_top_outputs = grad_top_outputs.mm(ctx.top_features)
-
+        
         IoU = torch.clamp(IoU, min=IoU_memory_clip[0], max=IoU_memory_clip[1])
         bottom_IoU = torch.clamp(bottom_IoU, min=IoU_memory_clip[0], max=IoU_memory_clip[1])
         top_IoU = torch.clamp(top_IoU, min=IoU_memory_clip[0], max=IoU_memory_clip[1])
+        update_max_times = 15
         for x, y, b, t, iou, biou, tiou in zip(inputs, indexes, bottom_inputs, top_inputs, IoU, bottom_IoU, top_IoU):
             
             # 1. momentum update
+            # if ctx.update_times[y] < update_max_times:
             # ctx.features[y] = ctx.momentum * ctx.features[y] + (1.0 - ctx.momentum) * x
             # ctx.bottom_features[y] = ctx.momentum * ctx.bottom_features[y] + (1.0 - ctx.momentum) * b
             # ctx.top_features[y] = ctx.momentum * ctx.top_features[y] + (1.0 - ctx.momentum) * t
+            # ctx.update_times[y] = ctx.update_times[y] + 1
 
             # 2. IoU update
             ctx.features[y] = (1 - iou) * ctx.features[y] + iou * x
@@ -103,14 +106,13 @@ class HM_part(autograd.Function):
             ctx.features[y] /= ctx.features[y].norm()
             ctx.bottom_features[y] /= ctx.bottom_features[y].norm()
             ctx.top_features[y] /= ctx.top_features[y].norm()
-            ctx.mIoU[y] = ctx.IoU_momentum * ctx.mIoU[y] + (1.0 - ctx.IoU_momentum) * iou
 
         return grad_inputs, grad_bottom_outputs, grad_top_outputs, None, None, None, None, None, None, None, None, None, None, None
 
-def hm_part(inputs, bottom_inputs, top_inputs, indexes, features, bottom_features, top_features, mIoU, momentum, IoU_momentum, \
+def hm_part(inputs, bottom_inputs, top_inputs, indexes, features, bottom_features, top_features, update_times, momentum, IoU_momentum, \
                     IoU, top_IoU, bottom_IoU, IoU_memory_clip):
     return HM_part.apply(
-        inputs, bottom_inputs, top_inputs, indexes, features, bottom_features, top_features, mIoU, IoU, top_IoU, bottom_IoU, \
+        inputs, bottom_inputs, top_inputs, indexes, features, bottom_features, top_features, update_times, IoU, top_IoU, bottom_IoU, \
         torch.Tensor([momentum]).to(inputs.device), torch.Tensor([IoU_momentum]).to(inputs.device), \
         torch.Tensor(IoU_memory_clip).to(inputs.device)
     )
@@ -192,7 +194,7 @@ class HybridMemoryMultiFocalPercent(nn.Module):
         self.idx = torch.zeros(num_memory).long()
         self.register_buffer("features", torch.zeros(num_memory, num_features))
         self.register_buffer("labels", torch.zeros(num_memory).long())
-        self.register_buffer("mIoU", torch.zeros(num_memory).float())
+        self.register_buffer("update_times", torch.zeros(num_memory).float())
 
         if self.use_part_feat:
             self.register_buffer("bottom_features", torch.zeros(num_memory, num_features))
@@ -222,7 +224,7 @@ class HybridMemoryMultiFocalPercent(nn.Module):
     @torch.no_grad()
     def _update_label(self, labels):
         self.labels.data.copy_(labels.long().to(self.labels.device))
-        self.mIoU.data.copy_(torch.ones(len(self.mIoU)).float()).to(self.mIoU.device)
+        self.update_times.data.copy_(torch.zeros(len(self.update_times)).float()).to(self.update_times.device)
 
     @torch.no_grad()
     def _update_label2(self, labels):
@@ -358,14 +360,14 @@ class HybridMemoryMultiFocalPercent(nn.Module):
             bottom_inputs = F.normalize(part_feats[:, :256], p=2, dim=1)
             top_inputs = F.normalize(part_feats[:, 256:], p=2, dim=1)
             inputs, bottom_inputs, top_inputs = hm_part(inputs, bottom_inputs, top_inputs, indexes, self.features, self.bottom_features, \
-                                                self.top_features, self.mIoU, self.momentum, self.IoU_momentum, IoU, top_IoU, \
+                                                self.top_features, self.update_times, self.momentum, self.IoU_momentum, IoU, top_IoU, \
                                                 bottom_IoU, self.IoU_memory_clip)   # [B, N]
             # inputs_ = inputs[:, indexes].diag()
             # memory_similarity = inputs_.mean().detach()
             # losses['memory_similarity'] = memory_similarity
             inputs, bottom_inputs, top_inputs = inputs / self.temp, bottom_inputs / self.temp, top_inputs / self.temp
         else:
-            inputs = hm(inputs, indexes, self.features, self.mIoU, IoU, self.momentum, self.IoU_momentum)   # [B, N]
+            inputs = hm(inputs, indexes, self.features, self.update_times, IoU, self.momentum, self.IoU_momentum)   # [B, N]
             inputs /= self.temp
 
         # dialog = torch.eye(inputs.shape[0]).bool().cuda()
