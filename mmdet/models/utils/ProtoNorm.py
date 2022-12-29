@@ -43,7 +43,8 @@ class _PrototypeNorm(_BatchNorm):
 
             # process labelled
             for t in targets_unique:
-                if t != bg_label: prototypes.append(input[targets==t].mean([0]))
+                if t != bg_label:
+                    prototypes.append(input[targets==t].mean([0]))
 
             # for t in targets_unique:
             #     prototypes.append(input[targets==t].mean([0]))

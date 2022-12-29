@@ -537,6 +537,7 @@ class CGPSHead(nn.Module):
 
         rid_pred = id_pred[id_labels!=-2]
         rid_labels = id_labels[id_labels!=-2]
+
         rpart_feats = part_feats[id_labels!=-2]
         memory_loss = self.loss_reid(rid_pred, rid_labels, IoU, rpart_feats, top_IoU, bottom_IoU)
         memory_loss['global_cluster_hard_loss'] *= self.global_weight

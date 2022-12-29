@@ -3,7 +3,7 @@ _base_ = [
     '../_base_/datasets/coco_reid_unsup_prw.py',
     '../_base_/schedules/schedule_1x_reid_norm_base.py', '../_base_/default_runtime.py'
 ]
-TEST = True
+TEST = False
 USE_PART_FEAT = True
 GLOBAL_WEIGHT = 0.9
 CO_LEARNING = False

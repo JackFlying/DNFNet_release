@@ -134,6 +134,7 @@ class ClusterHook(Hook):
             memory_labels.append(torch.LongTensor(labels) + start_pid)
             start_pid += max(labels) + 1
         memory_labels = torch.cat(memory_labels).view(-1)
+        
         # if self.use_k_reciprocal_nearest:
         #     uncertainty = re_ranking_for_instance(labels, memory_features, self.cfg.PSEUDO_LABELS.K)
 
