@@ -449,10 +449,11 @@ def label_generator_FINCH_context_SpCL_Plus(cfg, features, cuda=True, indep_thre
         scene_sim = scene_features.mm(scene_features.t())
         # print("scene_sim", scene_sim[:50][:50])
 
+    # scene_sim = img_sim
     # if cfg.PSEUDO_LABELS.context_clip:
     #     scene_sim = scene_sim * (scene_sim > cfg.PSEUDO_LABELS.threshold)
     
-    hybrid_instance_sim, initial_rank = get_hybrid_sim(instance_sim, split_num, person_sim, scene_sim, 0., cfg.PSEUDO_LABELS.lambda_scene)
+    hybrid_instance_sim, initial_rank = get_hybrid_sim(instance_sim, split_num, person_sim, img_sim, 0., cfg.PSEUDO_LABELS.lambda_scene)
     if cfg.PSEUDO_LABELS.SpCL:
         labels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, features, initial_rank, cuda, indep_thres, all_inds, **kwargs)
     else:
@@ -473,7 +474,7 @@ def label_generator_FINCH_context_SpCL_Plus(cfg, features, cuda=True, indep_thre
                     for j in range(0, i, 1):
                         person_sim[img_ids[i].item()][img_ids[j].item()] += instance_sim[tmp_id[i].item()][tmp_id[j].item()]
                         person_sim[img_ids[j].item()][img_ids[i].item()] += instance_sim[tmp_id[j].item()][tmp_id[i].item()]
-        hybrid_instance_sim, initial_rank = get_hybrid_sim(instance_sim, split_num, person_sim, scene_sim, cfg.PSEUDO_LABELS.lambda_person, cfg.PSEUDO_LABELS.lambda_scene)
+        hybrid_instance_sim, initial_rank = get_hybrid_sim(instance_sim, split_num, person_sim, img_sim, cfg.PSEUDO_LABELS.lambda_person, cfg.PSEUDO_LABELS.lambda_scene)
         if cfg.PSEUDO_LABELS.SpCL:
             labels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, features, initial_rank, cuda, indep_thres, all_inds, **kwargs)
         else:

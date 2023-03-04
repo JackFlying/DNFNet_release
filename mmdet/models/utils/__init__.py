@@ -6,6 +6,9 @@ from .HHCL_loss import ClusterMemory
 from .circle_loss import CircleLoss
 from .unified_loss import UnifiedLoss
 from .unified_loss_memory_loss import UnifiedLossMemoryMultiFocalPercent
+from .memory_quaduplet2_loss import MemoryQuaduplet2Loss
+from .hybrid_memory_loss_cluster import HybridMemoryMultiFocalPercentCluster
 
 __all__ = ['ResLayer', 'gaussian_radius', 'gen_gaussian_target', 'UnifiedLossMemoryMultiFocalPercent', \
-    'Quaduplet2Loss', 'HybridMemoryMultiFocalPercent', 'ClusterMemory', 'CircleLoss', 'UnifiedLoss', 'HybridMemoryMultiFocalPercentv2']
+    'Quaduplet2Loss', 'HybridMemoryMultiFocalPercent', 'ClusterMemory', 'CircleLoss', 'UnifiedLoss', 'HybridMemoryMultiFocalPercentv2',\
+    'MemoryQuaduplet2Loss', 'HybridMemoryMultiFocalPercentCluster']

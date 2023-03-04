@@ -83,7 +83,7 @@ class TwoStageDetector(BaseDetector):
         x = self.backbone(img)  # [1, 256, 216, 376], [1, 512, 108, 188], [1, 1024, 54, 94], [1, 2048, 27, 47]
         if self.with_neck:
             x = self.neck(x)    # [1, 1024, 54, 94]
-            x = [x[1]]
+            # x = [x[1]]
         return x
 
     def forward_dummy(self, img):
@@ -178,7 +178,7 @@ class TwoStageDetector(BaseDetector):
             losses.update(rpn_losses)
         else:
             proposal_list = proposals
-
+        
         roi_losses = self.roi_head.forward_train(x, img_metas, proposal_list,
                                                  gt_bboxes, gt_labels,
                                                  gt_bboxes_ignore, gt_masks,

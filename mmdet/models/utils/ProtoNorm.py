@@ -1,17 +1,23 @@
 import torch
 from torch.nn.modules.batchnorm import _BatchNorm
+import torch.nn.functional as F
 
 class _PrototypeNorm(_BatchNorm):
     def __init__(self, num_features, eps=1e-5, momentum=0.1,
                  affine=False, track_running_stats=True):
         super(_PrototypeNorm, self).__init__(num_features, eps, momentum, affine, track_running_stats)
         self.register_buffer("target_prototypes", None)
+        self.register_buffer("norm_flag", None)
+        self.register_buffer("iou", None)
             
-    def register_target_prototypes(self, targets):
+    def register_target_prototypes(self, targets, norm_flag, iou):
         self.target_prototypes = targets
+        self.norm_flag = norm_flag
+        self.iou = iou
         
     def reset_target_prototypes(self):
         self.target_prototypes = None
+        self.norm_flag = None
         
     def forward(self, input):
         self._check_input_dim(input)
@@ -21,8 +27,6 @@ class _PrototypeNorm(_BatchNorm):
         dim_o = [1]*ndim; dim_o[1] = -1 # 1d: [1,-1] 2d: [1, -1, 1, 1]
         
         exponential_average_factor = 0.0
-        # unlabel = 5555 # consider each unlabelled IDs as separate IDs for computing prototypes
-        bg_label = -2
 
         if self.training and self.track_running_stats:
             if self.num_batches_tracked is not None:
@@ -37,20 +41,23 @@ class _PrototypeNorm(_BatchNorm):
             targets = self.target_prototypes.long().to(input.device)
             targets_unique = torch.unique(targets)
             prototypes = []
-            # process unlabelled
-            # for f, t in zip(input, targets):
-            #     if t == bg_label: prototypes.append(f)
+            # weights = []
 
             # process labelled
-            for t in targets_unique:
-                if t != bg_label:
-                    prototypes.append(input[targets==t].mean([0]))
-
             # for t in targets_unique:
-            #     prototypes.append(input[targets==t].mean([0]))
+            #     # weight = self.iou[targets==t]
+            #     # weight /= weight.sum()
+            #     # prototype = torch.sum(torch.mul(weight.unsqueeze(1), input[targets==t]), dim=0)
+            #     prototype = input[targets==t].mean([0])
+            #     prototypes.append(prototype)
 
-            prototypes = torch.stack(prototypes)
+            # # keep the best IoU instance for each class
+            for t, nf in zip(input, self.norm_flag):
+                if nf:
+                    prototypes.append(t)
             
+            prototypes = torch.stack(prototypes)
+    
             n = input.numel() / input.size(1)
             mean = prototypes.mean(dim_s)
             var = ((input-mean.view(dim_o))**2).sum(dim_s)/n
@@ -112,8 +119,8 @@ def convert_bn_to_pn(module, module_names=None):
         
     return mod
 
-def register_targets_for_pn(module, targets):
+def register_targets_for_pn(module, targets, norm_flag, iou):
     for mod in module.modules():
         if isinstance(mod, _PrototypeNorm):
-            mod.register_target_prototypes(targets)
+            mod.register_target_prototypes(targets, norm_flag, iou)
     

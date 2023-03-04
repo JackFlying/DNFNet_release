@@ -195,8 +195,6 @@ def search_performance_calc(gallery_set, probe_set, gallery_det, gallery_feat, p
     image_root = '/home/linhuadong/dataset/PRW/frames'
     ret = {'image_root': image_root, 'results': []}
     for i in tqdm(range(len(probe_set))):
-        if i > 10:
-            break
         y_true, y_score = [], []
         imgs, rois = [], []
         roi_feats = []

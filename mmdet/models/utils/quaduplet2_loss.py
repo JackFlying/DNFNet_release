@@ -4,6 +4,23 @@ import torch.nn.functional as F
 import numpy as np
 import os 
 
+def euclidean_dist(x, y):
+	m, n = x.size(0), y.size(0)
+	xx = torch.pow(x, 2).sum(1, keepdim=True).expand(m, n)
+	yy = torch.pow(y, 2).sum(1, keepdim=True).expand(n, m).t()
+	dist = xx + yy
+	dist.addmm_(1, -2, x, y.t())
+	dist = dist.clamp(min=1e-12).sqrt()  # for numerical stability
+	return dist
+
+def cosine_dist(x, y):
+	bs1, bs2 = x.size(0), y.size(0)
+	frac_up = torch.matmul(x, y.transpose(0, 1))
+	frac_down = (torch.sqrt(torch.sum(torch.pow(x, 2), 1))).view(bs1, 1).repeat(1, bs2) * \
+	            (torch.sqrt(torch.sum(torch.pow(y, 2), 1))).view(1, bs2).repeat(bs1, 1)
+	cosine = frac_up / frac_down
+	return 1-cosine
+
 class Quaduplet2Loss(nn.Module):
     """Triplet loss with hard positive/negative mining.
     Reference:
@@ -35,10 +52,12 @@ class Quaduplet2Loss(nn.Module):
         inputs_new = []
         bg = []
         targets_new = []
+        # index_new = index
         
         # label_mask = torch.load(os.path.join('saved_file', 'label_mask.pth')).cuda()    # [N, ]
         # target_label_mask = label_mask[index]
         
+        # inputs = F.normalize(inputs)
         for i in range(len(targets)):
             if targets[i] < 0:
                 bg.append(inputs[i])
@@ -55,11 +74,9 @@ class Quaduplet2Loss(nn.Module):
         if n == 0:
             return loss
         # Compute pairwise distance, replace by the official when merged
-        dist = torch.pow(inputs_new, 2).sum(dim=1, keepdim=True).expand(n, n)
-        dist = dist + dist.t()
-        dist.addmm_(1, -2, inputs_new, inputs_new.t())  # a^2 + b^2 - 2ab = (a - b)^2
-        dist = dist.clamp(min=1e-12).sqrt()  # for numerical stability, [P, P]
-
+        dist = euclidean_dist(inputs_new, inputs_new)
+        # dist = cosine_dist(inputs_new, inputs_new)
+  
         # For each anchor, find the hardest positive and negative
         mask = targets_new.expand(n, n).eq(targets_new.expand(n, n).t())
         dist_ap, dist_an = [], []
@@ -94,13 +111,8 @@ class Quaduplet2Loss(nn.Module):
             m = 0
             
         if m > 0:
-            dist_p = torch.pow(inputs_new, 2).sum(dim=1, keepdim=True).expand(n, m)
-            dist_bg = torch.pow(bg, 2).sum(dim=1, keepdim=True)
-            dist_bg = dist_bg.expand(m, n)
-            dist_new = dist_p + dist_bg.t()
-            dist_new.addmm_(1, -2, inputs_new, bg.t())
-            dist_new = dist_new.clamp(min=1e-12).sqrt()  # for numerical stability
-
+            dist_new = euclidean_dist(inputs_new, bg)
+            # dist_new = cosine_dist(inputs_new, bg)
             dist_ap, dist_an = [], []
             try:
                 for i in range(n):
