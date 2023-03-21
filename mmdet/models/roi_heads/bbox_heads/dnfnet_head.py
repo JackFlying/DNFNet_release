@@ -10,7 +10,7 @@ from mmdet.core import (auto_fp16, build_bbox_coder, force_fp32, multi_apply,
                         multiclass_nms, multiclass_nms_aug)
 from mmdet.models.builder import HEADS, build_loss
 from mmdet.models.losses import accuracy
-from mmdet.models.utils import HybridMemoryMultiFocalPercent, Quaduplet2Loss, CircleLoss, UnifiedLoss
+from mmdet.models.utils import HybridMemoryMultiFocalPercent, Quaduplet2Loss, HybridMemoryMultiFocalPercentCluster
 from .gfn import GalleryFilterNetwork
 from mmdet.models.utils.ProtoNorm import PrototypeNorm1d, register_targets_for_pn, convert_bn_to_pn
 import os
@@ -94,7 +94,7 @@ class DNFNetHead(nn.Module):
         self.bbox_coder = build_bbox_coder(bbox_coder)
         self.loss_cls = build_loss(loss_cls)
         self.loss_bbox = build_loss(loss_bbox)
-        self.loss_reid = HybridMemoryMultiFocalPercent(num_features, id_num, temp=temperature, momentum=momentum, testing=testing, cluster_top_percent=cluster_top_percent, \
+        self.loss_reid = HybridMemoryMultiFocalPercentCluster(num_features, id_num, temp=temperature, momentum=momentum, testing=testing, cluster_top_percent=cluster_top_percent, \
                                                         instance_top_percent=instance_top_percent, use_cluster_hard_loss=use_cluster_hard_loss,
                                                         use_instance_hard_loss=use_instance_hard_loss, use_hybrid_loss=use_hybrid_loss, use_IoU_loss=use_IoU_loss, \
                                                         use_IoU_memory=use_IoU_memory, IoU_loss_clip=IoU_loss_clip, IoU_memory_clip=IoU_memory_clip, \
@@ -333,15 +333,15 @@ class DNFNetHead(nn.Module):
         
         id_feat1, id_feat2 = self.id_feature(x), self.id_feature1(x1)
 
-        if self.norm_type in ['protonorm', 'batchnorm'] and self.training:
-            id_pred = torch.cat((id_feat1, id_feat2), axis=1)
-            id_pred[id_labels!=-2] = self.normalize(id_pred[id_labels!=-2])
-            id_pred[id_labels==-2] = self.bgnormalize(id_pred[id_labels==-2])
-        else:
-            id_pred = torch.cat((id_feat1, id_feat2), axis=1)
-            id_pred = self.normalize(id_pred)
-        # id_pred = F.normalize(torch.cat((id_feat1, id_feat2), axis=1))
-        # id_pred = torch.cat((id_feat1, id_feat2), axis=1)
+        if self.norm_type in ['protonorm', 'batchnorm']:
+            if self.training:
+                id_pred = torch.cat((id_feat1, id_feat2), axis=1)
+                id_pred[id_labels!=-2] = self.normalize(id_pred[id_labels!=-2])
+                id_pred[id_labels==-2] = self.bgnormalize(id_pred[id_labels==-2])
+            else:
+                id_pred = torch.cat((id_feat1, id_feat2), axis=1)
+                id_pred = self.normalize(id_pred)
+        id_pred = F.normalize(torch.cat((id_feat1, id_feat2), axis=1))
 
         scene_embed, query_embed = None, None
         if self.use_gfn:
@@ -356,16 +356,15 @@ class DNFNetHead(nn.Module):
                 part_feat1 = part_feat1.view(part_feat1.size(0), -1)
                 part_feat = part_feat.view(part_feat.size(0), -1)
                 id_part_feat1, id_part_feat2 = self.id_part_feature[i](part_feat), self.id_part_feature1[i](part_feat1)
-                if self.norm_type in ['protonorm', 'batchnorm'] and self.training:
-                    id_feat = torch.cat((id_part_feat1, id_part_feat2), axis=1)
-                    id_feat[id_labels!=-2] = self.normalize_part[i](id_feat[id_labels!=-2])
-                    id_feat[id_labels==-2] = self.bgnormalize_part[i](id_feat[id_labels==-2])
-                else:
-                    id_feat = torch.cat((id_part_feat1, id_part_feat2), axis=1)
-                    id_feat = self.normalize_part[i](id_feat)
-                
-                # id_feat = F.normalize(torch.cat((id_part_feat1, id_part_feat2), axis=1))
-                # id_feat = torch.cat((id_part_feat1, id_part_feat2), axis=1)
+                if self.norm_type in ['protonorm', 'batchnorm']:
+                    if self.training:
+                        id_feat = torch.cat((id_part_feat1, id_part_feat2), axis=1)
+                        id_feat[id_labels!=-2] = self.normalize_part[i](id_feat[id_labels!=-2])
+                        id_feat[id_labels==-2] = self.bgnormalize_part[i](id_feat[id_labels==-2])
+                    else:
+                        id_feat = torch.cat((id_part_feat1, id_part_feat2), axis=1)
+                        id_feat = self.normalize_part[i](id_feat)
+                id_feat = F.normalize(torch.cat((id_part_feat1, id_part_feat2), axis=1))
                 part_id_pred.append(id_feat)
             part_id_pred = torch.cat(part_id_pred, dim=1)   # [N, 512]
         return cls_score, bbox_pred, id_pred, part_id_pred, scene_embed, query_embed
@@ -568,7 +567,7 @@ class DNFNetHead(nn.Module):
                 IoU = torchvision.ops.box_iou(pos_bbox_pred, pos_bbox_targets)
                 top_IoU = torchvision.ops.box_iou(top_pos_bbox_pred, top_pos_bbox_targets)
                 bottom_IoU = torchvision.ops.box_iou(bottom_pos_bbox_pred, bottom_pos_bbox_targets)
-
+                # import ipdb;    ipdb.set_trace()
                 dialog = torch.eye(IoU.shape[0]).bool().cuda()
                 IoU = IoU[dialog]
                 top_IoU = top_IoU[dialog]

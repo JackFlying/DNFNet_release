@@ -102,27 +102,14 @@ class ClusterHook(Hook):
                         cfg=self.cfg
                     )
                     uncertainty = self.get_uncertainty_by_part(pseudo_labels, pseudo_label2s, memory_features)
+                    torch.save(uncertainty, os.path.join("saved_file", "uncertainty.pth"))
                     if self.cfg.PSEUDO_LABELS.hard_mining.use_hard_mining:
                         pseudo_labels, label_mask = transfer_label_noise_to_outlier(uncertainty, pseudo_labels[0])
+                        torch.save(label_mask, os.path.join("saved_file", "label_mask.pth"))
                     
                     # get_is_known_list(pseudo_labels[0]) # For pseudo labels
                     get_is_known_list(give_unknown_id())  # For gt labels
-                    
                     # label_mask = outlier_mask(pseudo_labels[0])
-                    # for iter in range(self.cfg.PSEUDO_LABELS.hard_mining.label_refine_iters):
-                    #     print("iter", iter)
-                    #     # pseudo_labels = label_refine_by_part(pseudo_labels[0], uncertainty)
-                    #     # pseudo_label2s = label_refine_by_part(pseudo_label2s[0], uncertainty)
-                    #     # pseudo_labels = label_refine_by_part2(self.cfg, pseudo_labels[0], uncertainty)
-                    #     # pseudo_label2s = label_refine_by_part2(self.cfg, pseudo_label2s[0], uncertainty)
-                    #     # uncertainty = self.get_uncertainty_by_part(memory_features, pseudo_labels, pseudo_label2s)
-                    #     update_pseudo_labels = label_refine_by_soft_labels(memory_features, pseudo_labels, pseudo_label2s, uncertainty)
-                    #     update_pseudo_label2s = label_refine_by_soft_labels(memory_features, pseudo_label2s, pseudo_labels, uncertainty)
-                    #     uncertainty = self.get_uncertainty_by_part(update_pseudo_labels, update_pseudo_label2s)
-                    #     pseudo_labels = update_pseudo_labels
-                    #     pseudo_label2s = update_pseudo_label2s
-
-                    torch.save(uncertainty, os.path.join("saved_file", "uncertainty.pth"))
 
             torch.save(pseudo_labels, os.path.join("saved_file", "pseudo_labels.pth"))
         
@@ -153,7 +140,6 @@ class ClusterHook(Hook):
         #     memory_labels = memory_labels.repeat(2)
 
         means, stds = self.get_gaussion_distributation(memory_features[0], memory_labels)
-        
         if hasattr(runner.model.module.roi_head.bbox_head.loss_reid, "use_cluster_memory"):
             if hasattr(runner.model.module.roi_head.bbox_head.loss_reid, "cluster_mean"):
                 runner.model.module.roi_head.bbox_head.loss_reid._del_cluster()
@@ -161,17 +147,6 @@ class ClusterHook(Hook):
         
         runner.model.module.roi_head.bbox_head.loss_reid._update_label(memory_labels)
         
-        # if self.co_learning:
-        #     memory_label2s= []
-        #     start_pid = 0
-        #     for idx, dataset in enumerate(self.datasets):
-        #         labels = pseudo_label2s[idx]
-        #         memory_label2s.append(torch.LongTensor(labels) + start_pid)
-        #         start_pid += max(labels) + 1
-        #     memory_label2s = torch.cat(memory_label2s).view(-1)
-        #     runner.model.module.roi_head.bbox_head.loss_reid._update_label2(memory_label2s)
-        #     self.logger.info('pseudo label2 range: '+ str(memory_label2s.min())+ str(memory_label2s.max()))
-
         self.logger.info('pseudo label range: '+ str(memory_labels.min())+ str(memory_labels.max()))
         self.logger.info("Finished updating pseudo label")
         self.epoch += 1
@@ -321,95 +296,6 @@ def transfer_label_noise_to_outlier(uncertaintys, labels):
     return [new_labels], mask
 
 @torch.no_grad()
-def label_refine_by_soft_labels(memory_features, pseudo_labels, pseudo_label2s, uncertainty):
-    pseudo_labels = torch.tensor(pseudo_labels)
-    pseudo_label2s = torch.tensor(pseudo_label2s)
-
-    iou_mat = compute_label_iou_matrix(pseudo_label2s, pseudo_labels)
-    norm_iou_mat = (iou_mat.t() / iou_mat.t().sum(0)).t()
-
-    pred_temp = 30
-    label_center2s = generate_cluster_features(pseudo_label2s[0].tolist(), memory_features[0])
-    probs_perv = extract_probabilities(memory_features[0], label_center2s, pred_temp)
-    N, C = probs_perv.size(0), probs_perv.size(1)
-    onehot_labels = torch.full(size=(N, C), fill_value=0)   # [18048, 6104]
-    onehot_labels.scatter_(dim=1, index=torch.unsqueeze(pseudo_label2s[0], dim=1), value=1)
-    alpha = 0.9
-    probs_perv = alpha * onehot_labels + (1.0 - alpha) * probs_perv # pseudo_label2s修正pseudo_labels
-
-    prob_soft_labels = probs_perv.mm(norm_iou_mat)
-    beta = 0
-    hard_iou_labels = compute_sample_softlabels(pseudo_label2s, pseudo_labels, "iou", "original")
-    sample_soft_labels = beta * hard_iou_labels + (1.0 - beta) * prob_soft_labels   # 软硬标签的综合程度
-    _, sample_hard_labels = sample_soft_labels.max(dim=-1)
-
-    update_pseudo_labels = pseudo_labels.clone()
-    update_pseudo_labels[0][uncertainty == 0] = sample_hard_labels[uncertainty == 0]
-    # update_pseudo_labels[0] = sample_hard_labels
-
-    print("labels change num", len(torch.nonzero(update_pseudo_labels[0] != pseudo_labels[0])))
-    modified_hard_labels = reassignment_labels(update_pseudo_labels[0].tolist())
-
-    return [modified_hard_labels]
-
-@torch.no_grad()
-def label_refine_by_part(pseudo_label, uncertainty):
-    bottom_features = torch.load("./saved_file/bottom_features.pth")
-    top_features = torch.load("./saved_file/top_features.pth")
-    bottom_center_feat = generate_cluster_features(pseudo_label, bottom_features)   # [C]
-    top_center_feat = generate_cluster_features(pseudo_label, top_features) # [C]
-    bottom_sim = bottom_features.mm(bottom_center_feat.t())   # [N, C]
-    top_sim = top_features.mm(top_center_feat.t())    # [N, C]
-    part_sim = 0.5 * bottom_sim + 0.5 * top_sim # [N, C]
-    
-    _, refine_lable = torch.max(part_sim, dim=-1)    # [N]
-    hard_sample_index = (uncertainty == 0)
-    pseudo_label = torch.tensor(pseudo_label)
-    pseudo_label[hard_sample_index] = refine_lable[hard_sample_index]
-    pseudo_label = pseudo_label.tolist()
-
-    new_pseudo_label = reassignment_labels(pseudo_label)
-
-    return [new_pseudo_label]
-
-@torch.no_grad()
-def label_refine_by_part2(cfg, pseudo_label, uncertainty):
-    """
-        剔除难样本,求聚类中心
-    """
-    bottom_features = torch.load("./saved_file/bottom_features.pth")
-    top_features = torch.load("./saved_file/top_features.pth")
-    global_features = torch.load("./saved_file/features.pth")
-
-    sample_index_no_hard = (uncertainty == 1)
-    pseudo_label = torch.tensor(pseudo_label)
-    # print("pseudo_label[sample_index_no_hard]", len(torch.unique(pseudo_label[sample_index_no_hard])))
-    bottom_center_feat = generate_cluster_features(pseudo_label[sample_index_no_hard].tolist(), bottom_features[sample_index_no_hard])   # [C']
-    top_center_feat = generate_cluster_features(pseudo_label[sample_index_no_hard].tolist(), top_features[sample_index_no_hard]) # [C']
-    global_center_feat = generate_cluster_features(pseudo_label[sample_index_no_hard].tolist(), global_features[sample_index_no_hard]) # [C']
-    # 求聚类中心对应的伪标签
-    center_pseudo_label = torch.unique(pseudo_label[sample_index_no_hard])
-    center_pseudo_label = sorted(center_pseudo_label.tolist())
-    center_pseudo_label = torch.tensor(center_pseudo_label)
-    # 求与聚类中心的相似度
-    bottom_sim = bottom_features.mm(bottom_center_feat.t())   # [N, C']
-    top_sim = top_features.mm(top_center_feat.t())    # [N, C']
-    global_sim = global_features.mm(global_center_feat.t())
-    global_weight = cfg.PSEUDO_LABELS.hard_mining.refine_global_weight
-    hybrid_sim = global_weight * global_sim +  (1 - global_weight) / 2 * (bottom_sim + top_sim)
-
-    # 找到相似度最高的聚类中心
-    _, max_sim_index = torch.max(hybrid_sim, dim=-1)    # [N], ∈[0, C']
-    refine_lable = center_pseudo_label[max_sim_index]
-
-    pseudo_label[uncertainty == 0] = refine_lable[uncertainty == 0]
-    pseudo_label = pseudo_label.tolist()
-    # 针对标签缺失的问题
-    new_pseudo_label = reassignment_labels(pseudo_label)
-
-    return [new_pseudo_label]
-
-@torch.no_grad()
 def reassignment_labels(pseudo_label):
     """
         给标签赋予新的顺序,解决中间断层的问题
@@ -418,7 +304,7 @@ def reassignment_labels(pseudo_label):
     old_labels_set = collections.defaultdict(list)
     for i, label in enumerate(pseudo_label):
         old_labels_set[label].append(i)
-    
+    # import ipdb;    ipdb.set_trace()
     new_labels_set = collections.defaultdict(list)
     # 赋予新的伪标签
     for new_label, old_label in enumerate(old_labels_set.keys()):

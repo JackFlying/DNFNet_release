@@ -147,9 +147,6 @@ class TwoStageDetector(BaseDetector):
         kwargs['use_crop'] = use_crop
         if use_crop:
             crop_feats = []
-            # _, _, h, w = img.size() # w > h
-            # crop_h = int(h * 0.08)
-            # crop_w = int(w * 0.15)
             for i in range(len(gt_bboxes)):
                 for j in range(len(gt_bboxes[i])):
                     x1, y1, x2, y2 = gt_bboxes[i][j][0], gt_bboxes[i][j][1], gt_bboxes[i][j][2], gt_bboxes[i][j][3]
@@ -208,8 +205,6 @@ class TwoStageDetector(BaseDetector):
     def simple_test(self, img, img_metas, proposals=None, rescale=False, **kwargs):
         """Test without augmentation."""
         assert self.with_bbox, 'Bbox head must be implemented.'
-
-        # # kwargs['use_crop'] = False
         if 'use_crop' not in kwargs.keys():
             kwargs['use_crop'] = False
         

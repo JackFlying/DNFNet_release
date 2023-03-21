@@ -184,7 +184,7 @@ lr_config = dict(
     warmup_iters=2242,
     warmup_ratio=1.0 / 200,
     step=[16, 22])
-total_epochs = 36
+total_epochs = 30
 
 SPCL=True
 PSEUDO_LABELS = dict(

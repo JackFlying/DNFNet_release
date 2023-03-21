@@ -41,7 +41,7 @@ class Quaduplet2Loss(nn.Module):
         self.use_hard_mining = use_hard_mining
         self.IoU_loss_clip = IoU_loss_clip
 
-    def forward(self, inputs, targets, index, IoU):
+    def forward(self, inputs, targets, index=None, IoU=None):
         """
         Does not calculate noise inputs with label -1
         Args:
@@ -52,10 +52,7 @@ class Quaduplet2Loss(nn.Module):
         inputs_new = []
         bg = []
         targets_new = []
-        # index_new = index
-        
-        # label_mask = torch.load(os.path.join('saved_file', 'label_mask.pth')).cuda()    # [N, ]
-        # target_label_mask = label_mask[index]
+        # indexs_new = []
         
         # inputs = F.normalize(inputs)
         for i in range(len(targets)):
@@ -64,11 +61,17 @@ class Quaduplet2Loss(nn.Module):
             else:
                 inputs_new.append(inputs[i])
                 targets_new.append(targets[i])
+                # indexs_new.append(index[i])
 
         inputs_new = torch.stack(inputs_new)
         targets_new = torch.stack(targets_new)
+        # indexs_new = torch.stack(indexs_new)
+        
+        # label_mask = torch.load(os.path.join('saved_file', 'label_mask.pth')).cuda()    # [N, ]
+        # target_label_mask = label_mask[indexs_new]
         # inputs_new = inputs_new[target_label_mask]
         # targets_new = targets_new[target_label_mask]
+        
         n = inputs_new.size(0)
         loss = torch.tensor(0.).to(inputs_new.device)
         if n == 0:

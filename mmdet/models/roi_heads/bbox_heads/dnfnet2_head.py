@@ -10,7 +10,7 @@ from mmdet.core import (auto_fp16, build_bbox_coder, force_fp32, multi_apply,
                         multiclass_nms, multiclass_nms_aug)
 from mmdet.models.builder import HEADS, build_loss
 from mmdet.models.losses import accuracy
-from mmdet.models.utils import HybridMemoryMultiFocalPercent, Quaduplet2Loss, MemoryQuaduplet2Loss, HybridMemoryMultiFocalPercentCluster
+from mmdet.models.utils import HybridMemoryMultiFocalPercent, Quaduplet2Loss, MemoryQuaduplet2Loss, HybridMemoryMultiFocalPercentCluster, HybridMemoryMultiFocalPercentDnfnet
 from .gfn import GalleryFilterNetwork
 from mmdet.models.utils.ProtoNorm import PrototypeNorm1d, register_targets_for_pn, convert_bn_to_pn
 import os
@@ -94,7 +94,7 @@ class DNFNet2Head(nn.Module):
         self.bbox_coder = build_bbox_coder(bbox_coder)
         self.loss_cls = build_loss(loss_cls)
         self.loss_bbox = build_loss(loss_bbox)
-        self.loss_reid = HybridMemoryMultiFocalPercent(num_features, id_num, temp=temperature, momentum=momentum, testing=testing, cluster_top_percent=cluster_top_percent, \
+        self.loss_reid = HybridMemoryMultiFocalPercentCluster(num_features, id_num, temp=temperature, momentum=momentum, testing=testing, cluster_top_percent=cluster_top_percent, \
                                                         instance_top_percent=instance_top_percent, use_cluster_hard_loss=use_cluster_hard_loss,
                                                         use_instance_hard_loss=use_instance_hard_loss, use_hybrid_loss=use_hybrid_loss, use_IoU_loss=use_IoU_loss, \
                                                         use_IoU_memory=use_IoU_memory, IoU_loss_clip=IoU_loss_clip, IoU_memory_clip=IoU_memory_clip, \
@@ -178,7 +178,7 @@ class DNFNet2Head(nn.Module):
         self.fc_part_reid = nn.ModuleList([nn.Linear(in_channels * self.feature_h * self.feature_w // 2, 256),
                                         nn.Linear(in_channels * self.feature_h * self.feature_w // 2, 256),
                                     ])
-    
+
         if self.norm_type is 'protonorm':
             self.normalize = PrototypeNorm1d(256)
             self.normalize_part = nn.ModuleList([PrototypeNorm1d(256), PrototypeNorm1d(256)])
@@ -191,13 +191,6 @@ class DNFNet2Head(nn.Module):
             self.bgnormalize = nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine)
             self.bgnormalize_part = nn.ModuleList([nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine), \
                                     nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine)])
-    
-        # self.relation = nn.Sequential(nn.Linear(256, 64),
-        #                               nn.ReLU(),
-        #                               nn.Linear(64, 8),
-        #                               nn.ReLU(),
-        #                               nn.Linear(8, 1),
-        #                               )
         self.proposal_score_max = False
 
     def init_weights(self):
@@ -318,7 +311,6 @@ class DNFNet2Head(nn.Module):
             part_id_pred = []
             for i in range(len(part_feats)):
                 part_feat = self.deform_conv(part_feats[i].contiguous())
-                # part_feat = part_feats[i].contiguous()
                 id_feat = self.fc_part_reid[i](part_feat.view(part_feat.size(0), -1))
                 if self.norm_type in ['protonorm', 'batchnorm']:
                     if self.training:
@@ -454,41 +446,6 @@ class DNFNet2Head(nn.Module):
                 crop_targets = torch.cat(crop_targets, 0)
         return labels, label_weights, bbox_targets, bbox_weights, bbox_targets_xywh, pos_is_gt_list, crop_targets
 
-    # def label_propagation(self, emb_all, y):
-    #     """
-    #         emb_all: [B, D]
-    #         y: [B, K], 与聚类中心的概率
-    #     """
-    #     # import ipdb;    ipdb.set_trace()
-    #     N = emb_all.shape[0]
-    #     eps = 1e-8
-    #     self.k = 5
-    #     self.alpha = 0.99
-        
-    #     self.sigma = self.relation(emb_all)
-    #     emb_all = emb_all / (self.sigma + eps) # N*d
-    #     emb1 = torch.unsqueeze(emb_all, 1) # N*1*d
-    #     emb2 = torch.unsqueeze(emb_all, 0) # 1*N*d
-    #     W = ((emb1 - emb2)**2).mean(2)   # N*N*d -> N*N
-    #     W = torch.exp(-W / 2)
-    #     ## keep top-k values
-    #     if self.k > 0:
-    #         topk, indices = torch.topk(W, self.k)
-    #         mask = torch.zeros_like(W)
-    #         mask = mask.scatter(1, indices, 1)
-    #         mask = ((mask + torch.t(mask)) > 0).type(torch.float32)      # union, kNN graph
-    #         W = W * mask
-    #     ## normalize
-    #     D = W.sum(0)
-    #     D_sqrt_inv = torch.sqrt(1.0 / (D + eps))
-    #     D1 = torch.unsqueeze(D_sqrt_inv, 1).repeat(1, N)
-    #     D2 = torch.unsqueeze(D_sqrt_inv, 0).repeat(N, 1)
-    #     S  = D1 * W * D2
-    #     # # Step3: Label Propagation, F = (I-\alpha S)^{-1}Y
-    #     y_  = torch.matmul(torch.inverse(torch.eye(N).cuda() - self.alpha * S + eps), y)
-        
-    #     return y_
-
     @force_fp32(apply_to=('cls_score', 'bbox_pred', 'id_pred'))
     def loss(self,
              cls_score,
@@ -572,6 +529,7 @@ class DNFNet2Head(nn.Module):
                 top_IoU = torchvision.ops.box_iou(top_pos_bbox_pred, top_pos_bbox_targets)
                 bottom_IoU = torchvision.ops.box_iou(bottom_pos_bbox_pred, bottom_pos_bbox_targets)
 
+                # import ipdb;    ipdb.set_trace()
                 dialog = torch.eye(IoU.shape[0]).bool().cuda()
                 IoU = IoU[dialog]
                 top_IoU = top_IoU[dialog]

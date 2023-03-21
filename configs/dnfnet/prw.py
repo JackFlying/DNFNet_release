@@ -3,7 +3,7 @@ _base_ = [
     '../_base_/datasets/coco_reid_unsup_prw.py',
     '../_base_/schedules/schedule_1x_reid_norm_base.py', '../_base_/default_runtime.py'
 ]
-TEST = True
+TEST = False
 USE_PART_FEAT = True
 GLOBAL_WEIGHT = 0.9
 CO_LEARNING = False
@@ -40,10 +40,10 @@ model = dict(
             use_IoU_memory=False,
             use_uncertainty_loss=False,
             use_hard_mining=False,
-            norm_type='batchnorm',    # ['l2norm', 'protonorm', 'batchnorm']
+            norm_type='l2norm',    # ['l2norm', 'protonorm', 'batchnorm']
             seperate_norm=False,
             use_bn_affine=False,
-            update_method='max_iou',    # ['momentum', 'iou', 'max_iou']
+            update_method='momentum',    # ['momentum', 'iou', 'max_iou']
             co_learning=CO_LEARNING,
             use_max_IoU_bbox=False,
             IoU_loss_clip=[0.7, 1.0],
@@ -167,7 +167,7 @@ lr_config = dict(
     warmup_iters=2242,
     warmup_ratio=1.0 / 200,
     step=[16, 22])
-total_epochs = 36
+total_epochs = 30
 
 SPCL=True
 PSEUDO_LABELS = dict(
