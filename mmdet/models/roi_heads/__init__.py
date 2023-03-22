@@ -14,7 +14,9 @@ from .point_rend_roi_head import PointRendRoIHead
 from .roi_extractors import SingleRoIExtractor
 from .shared_heads import ResLayer
 from .standard_roi_head import StandardRoIHead
-from .reid_roi_head import ReidRoIHead
+from .reid_roi_head_dnfnet2 import ReidRoIHeadDNFNet2
+from .reid_roi_head_dnfnet import ReidRoIHeadDNFNet
+from .reid_roi_head_siamese import ReidRoIHeadsiamese
 
 __all__ = [
     'BaseRoIHead', 'CascadeRoIHead', 'DoubleHeadRoIHead', 'MaskScoringRoIHead',
@@ -23,5 +25,6 @@ __all__ = [
     'Shared4Conv1FCBBoxHead', 'DoubleConvFCBBoxHead', 'FCNMaskHead',
     'HTCMaskHead', 'FusedSemanticHead', 'GridHead', 'MaskIoUHead',
     'SingleRoIExtractor', 'PISARoIHead', 'PointRendRoIHead', 'MaskPointHead',
-    'CoarseMaskHead', 'DynamicRoIHead', 'ReidRoIHead'
+    'CoarseMaskHead', 'DynamicRoIHead', 'ReidRoIHeadDNFNet', 'ReidRoIHeadDNFNet2',
+    'ReidRoIHeadsiamese'
 ]

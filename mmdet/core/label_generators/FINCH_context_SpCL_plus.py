@@ -449,10 +449,11 @@ def label_generator_FINCH_context_SpCL_Plus(cfg, features, cuda=True, indep_thre
         scene_sim = scene_features.mm(scene_features.t())
         # print("scene_sim", scene_sim[:50][:50])
 
+    # scene_sim = img_sim
     # if cfg.PSEUDO_LABELS.context_clip:
     #     scene_sim = scene_sim * (scene_sim > cfg.PSEUDO_LABELS.threshold)
     
-    hybrid_instance_sim, initial_rank = get_hybrid_sim(instance_sim, split_num, person_sim, scene_sim, 0., cfg.PSEUDO_LABELS.lambda_scene)
+    hybrid_instance_sim, initial_rank = get_hybrid_sim(instance_sim, split_num, person_sim, img_sim, 0., cfg.PSEUDO_LABELS.lambda_scene)
     if cfg.PSEUDO_LABELS.SpCL:
         labels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, features, initial_rank, cuda, indep_thres, all_inds, **kwargs)
     else:
@@ -473,7 +474,7 @@ def label_generator_FINCH_context_SpCL_Plus(cfg, features, cuda=True, indep_thre
                     for j in range(0, i, 1):
                         person_sim[img_ids[i].item()][img_ids[j].item()] += instance_sim[tmp_id[i].item()][tmp_id[j].item()]
                         person_sim[img_ids[j].item()][img_ids[i].item()] += instance_sim[tmp_id[j].item()][tmp_id[i].item()]
-        hybrid_instance_sim, initial_rank = get_hybrid_sim(instance_sim, split_num, person_sim, scene_sim, cfg.PSEUDO_LABELS.lambda_person, cfg.PSEUDO_LABELS.lambda_scene)
+        hybrid_instance_sim, initial_rank = get_hybrid_sim(instance_sim, split_num, person_sim, img_sim, cfg.PSEUDO_LABELS.lambda_person, cfg.PSEUDO_LABELS.lambda_scene)
         if cfg.PSEUDO_LABELS.SpCL:
             labels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, features, initial_rank, cuda, indep_thres, all_inds, **kwargs)
         else:
@@ -482,41 +483,6 @@ def label_generator_FINCH_context_SpCL_Plus(cfg, features, cuda=True, indep_thre
         #     labels, centers, num_classes = post_process(cfg, labels, hybrid_instance_sim, features)
 
     return labels, centers, num_classes, indep_thres
-
-
-def post_process(cfg, labels, hybrid_instance_sim, features):
-    """
-        将相似度小于阈值的pair删除
-    """
-    pair, pair_sim = [], []
-    unique_labels = set(labels.cpu().numpy())
-    num_classes = len(unique_labels)
-    for label in unique_labels:
-        b = (labels == label)
-        tmp_id = b.nonzero()
-        if len(tmp_id) > 1:
-            for i in range(len(tmp_id)):
-                for j in range(0, i, 1):
-                    pair.append((tmp_id[i].item(), tmp_id[j].item()))
-                    pair_sim.append(hybrid_instance_sim[tmp_id[i].item()][tmp_id[j].item()].item())
-    
-    pair, pair_sim = torch.tensor(pair), torch.tensor(pair_sim)
-    pair_sim = (pair_sim - pair_sim.min()) / (pair_sim.max() - pair_sim.min())
-    pair_select = pair[pair_sim < cfg.PSEUDO_LABELS.filter_threshold]
-    print("The number of pair not satisfy threshold is {}".format(len(pair_select)))
-
-    for pair in pair_select:
-        if (labels == labels[pair[0]]).sum() > 2:
-            labels[pair[0].item()] = num_classes
-            labels[pair[1].item()] = num_classes + 1
-            num_classes += 2
-        else:
-            labels[pair[1].item()] = num_classes
-            num_classes += 1
-
-    centers = generate_cluster_features(labels, features)
-    return labels, centers, num_classes
-
 
 def generate_cluster_features(labels, features):
     centers = collections.defaultdict(list)

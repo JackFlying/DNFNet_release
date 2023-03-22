@@ -22,11 +22,12 @@ from .single_stage import SingleStageDetector
 from .two_stage import TwoStageDetector
 from .yolo import YOLOV3
 from .fcos_reid import FCOSReid
+from .two_stage_siamese import TwoStageDetectorsiamese
 
 __all__ = [
     'ATSS', 'BaseDetector', 'SingleStageDetector', 'TwoStageDetector', 'RPN',
     'FastRCNN', 'FasterRCNN', 'MaskRCNN', 'CascadeRCNN', 'HybridTaskCascade',
     'RetinaNet', 'FCOS', 'GridRCNN', 'MaskScoringRCNN', 'RepPointsDetector',
     'FOVEA', 'FSAF', 'NASFCOS', 'PointRend', 'GFL', 'CornerNet', 'PAA',
-    'YOLOV3', 'FCOSReid',
+    'YOLOV3', 'FCOSReid', 'TwoStageDetectorsiamese'
 ]

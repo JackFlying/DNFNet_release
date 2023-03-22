@@ -76,8 +76,11 @@ class BaseSampler(metaclass=ABCMeta):
                     'gt_labels must be given when add_gt_as_proposals is True')
             bboxes = torch.cat([gt_bboxes, bboxes], dim=0)
             assign_result.add_gt_(gt_labels)
+            # print("gt_labels", gt_labels)
+            # print("assign_result", assign_result.gt_inds)
             gt_ones = bboxes.new_ones(gt_bboxes.shape[0], dtype=torch.uint8)
             gt_flags = torch.cat([gt_ones, gt_flags])
+            # print("gt_flags", gt_flags)
 
         num_expected_pos = int(self.num * self.pos_fraction)
         pos_inds = self.pos_sampler._sample_pos(
