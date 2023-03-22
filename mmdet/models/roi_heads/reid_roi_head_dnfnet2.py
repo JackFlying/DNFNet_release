@@ -181,9 +181,10 @@ class ReidRoIHeadDNFNet2(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
         if self.use_RoI_Align_feat:
             RoI_Align_feat = bbox_feats.detach()    # visualize heat map
 
-        cls_score, bbox_pred, id_pred, part_id_pred = self.bbox_head(bbox_feats, part_feats, labels, rois, bbox_targets) # [N, 256]
+        cls_score, bbox_pred, id_pred, part_id_pred, id_pred_log_var = self.bbox_head(bbox_feats, part_feats, labels, rois, bbox_targets) # [N, 256]
         bbox_results = dict(cls_score=cls_score, bbox_pred=bbox_pred, bbox_feats=bbox_feats, id_pred=id_pred, \
-                            RoI_Align_feat=RoI_Align_feat, part_id_pred=part_id_pred, scene_emb=None, gfn_losses=torch.tensor(0.))
+                            RoI_Align_feat=RoI_Align_feat, part_id_pred=part_id_pred, scene_emb=None, gfn_losses=torch.tensor(0.),
+                            id_pred_log_var=id_pred_log_var)
         
         return bbox_results
 
@@ -209,6 +210,7 @@ class ReidRoIHeadDNFNet2(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
                                         bbox_results['bbox_pred'],
                                         bbox_results['id_pred'], 
                                         bbox_results['part_id_pred'],
+                                        bbox_results['id_pred_log_var'],
                                         rois,
                                         # crop_targets=None,
                                         *bbox_targets,

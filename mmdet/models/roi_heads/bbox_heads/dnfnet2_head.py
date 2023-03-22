@@ -174,7 +174,8 @@ class DNFNet2Head(nn.Module):
             
         self.feature_h = 14
         self.feature_w = 6
-        self.fc_reid = nn.Linear(in_channels * self.feature_h * self.feature_w, 256)  ###
+        self.fc_reid = nn.Linear(in_channels * self.feature_h * self.feature_w, 256)
+        self.fc_reid_std = nn.Linear(in_channels * self.feature_h * self.feature_w, 256)
         self.fc_part_reid = nn.ModuleList([nn.Linear(in_channels * self.feature_h * self.feature_w // 2, 256),
                                         nn.Linear(in_channels * self.feature_h * self.feature_w // 2, 256),
                                     ])
@@ -283,6 +284,7 @@ class DNFNet2Head(nn.Module):
         
         x_reid = x
         id_pred = self.fc_reid(x_reid.view(x_reid.size(0), -1))
+        id_pred_log_var = self.fc_reid_std(x_reid.view(x_reid.size(0), -1))
 
         if self.training:
             id_labels = labels[:, 1]            
@@ -306,6 +308,7 @@ class DNFNet2Head(nn.Module):
             else:
                 id_pred = self.normalize(id_pred)
         id_pred = F.normalize(id_pred)
+        
         part_id_pred = None
         if part_feats is not None:
             part_id_pred = []
@@ -321,7 +324,7 @@ class DNFNet2Head(nn.Module):
                 id_feat = F.normalize(id_feat)
                 part_id_pred.append(id_feat)
             part_id_pred = torch.cat(part_id_pred, dim=1)   # [N, 512]
-        return cls_score, bbox_pred, id_pred, part_id_pred
+        return cls_score, bbox_pred, id_pred, part_id_pred, id_pred_log_var
 
     def _get_target_single_crop(self, pos_bboxes, neg_bboxes, pos_gt_bboxes, 
                            pos_gt_labels, pos_gt_crop_feats, cfg):
@@ -452,6 +455,7 @@ class DNFNet2Head(nn.Module):
              bbox_pred,
              id_pred,
              part_feats,
+             id_pred_log_var,
              rois,
              labels,
              label_weights,
@@ -540,12 +544,12 @@ class DNFNet2Head(nn.Module):
         
         rid_pred = id_pred[id_labels!=-2]   # [B, 256]
         rid_labels = id_labels[id_labels!=-2]
-
+        rid_pred_log_var = id_pred_log_var[id_labels!=-2]
         rpart_feats = part_feats[id_labels!=-2] if part_feats is not None else None
-        memory_loss = self.loss_reid(rid_pred, rid_labels, IoU, rpart_feats, top_IoU, bottom_IoU, pos_is_gt_list)
+        
+        memory_loss = self.loss_reid(rid_pred, rid_labels, IoU, rpart_feats, top_IoU, bottom_IoU, pos_is_gt_list, rid_pred_log_var)
         memory_loss['global_cluster_hard_loss'] *= self.global_weight
         memory_loss["part_cluster_hard_loss"] *= (1 - self.global_weight)
-
         losses.update(memory_loss)
 
         if self.use_quaduplet_loss:
@@ -561,39 +565,6 @@ class DNFNet2Head(nn.Module):
             # all_features = self.loss_reid.get_all_features()
             # all_labels = self.loss_reid.get_all_cluster_ids()
             # losses['global_triplet_loss'] = self.loss_triplet(id_pred, new_id_labels, id_labels, IoU, all_features, all_labels) * self.triplet_weight
-
-        # self.loss_reid.update_label_online()
-
-            # bottom_triplet_loss = self.loss_triplet(part_feats[:, :256], new_id_labels, rid_labels, IoU) * self.triplet_weight
-            # top_triplet_loss = self.loss_triplet(part_feats[:, 256:], new_id_labels, rid_labels, IoU) * self.triplet_weight
-            # losses['part_triplet_loss'] = bottom_triplet_loss + top_triplet_loss
-            # losses['global_triplet_loss'] *= self.global_weight
-            # losses['part_triplet_loss'] *= (1 - self.global_weight)
-
-        # 拿features memory中的样本更新label
-        
-        # cluster_centroid = self.loss_reid.get_cluster_centroid()  # [N, D]
-        # origin_labels = self.loss_reid.get_cluster_ids(rid_labels)  # [B]
-        # hard_labels = torch.nn.functional.one_hot(origin_labels, num_classes=cluster_centroid.shape[0])
-                
-        # # y = emb_all.mm(cluster_centroid.t())
-        # # y = F.softmax(y, dim=-1)
-        # new_soft_labels = self.label_propagation(rid_pred, hard_labels.float())
-        # new_hard_labels = torch.argmax(new_soft_labels, dim=-1)
-
-        # if self.use_instance_loss:
-        #     rid_pred = F.normalize(id_pred[id_labels!=-2], dim=-1)
-        #     pos_crop_targets = F.normalize(pos_crop_targets, dim=-1)
-        #     cos_instance = torch.cosine_similarity(rid_pred, pos_crop_targets, dim=-1)
-        #     losses['loss_instance'] = (1 - cos_instance).mean()
-        
-        # if self.use_inter_loss:
-        #     rid_pred = F.normalize(rid_pred, dim=-1)
-        #     pos_crop_targets = F.normalize(pos_crop_targets, dim=-1)
-        #     crop_distribution = rid_pred.mm(rid_pred.t())
-        #     pred_distribution = pos_crop_targets.mm(pos_crop_targets.t())
-        #     losses['loss_inter'] = F.kl_div(crop_distribution.softmax(dim=-1).log(), pred_distribution.softmax(dim=-1), reduction='sum') + \
-        #                             F.kl_div(pred_distribution.softmax(dim=-1).log(), crop_distribution.softmax(dim=-1), reduction='sum')
 
         return losses
 

@@ -402,7 +402,7 @@ class HybridMemoryMultiFocalPercentDnfnet(nn.Module):
         targets = self.labels[indexes].clone()
         labels = self.labels.clone() # [N, ]
             
-        feats = F.normalize(feats, p=2, dim=1)
+        feats = F.normalize(feats, p=2, dim=1)        
         if self.use_part_feat:
             bottom_feats = F.normalize(part_feats[:, :256], p=2, dim=1)
             top_feats = F.normalize(part_feats[:, 256:], p=2, dim=1)
