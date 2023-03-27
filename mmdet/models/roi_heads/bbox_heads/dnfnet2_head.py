@@ -284,7 +284,12 @@ class DNFNet2Head(nn.Module):
         
         x_reid = x
         id_pred = self.fc_reid(x_reid.view(x_reid.size(0), -1))
-        id_pred_log_var = self.fc_reid_std(x_reid.view(x_reid.size(0), -1))
+        id_pred_log_var = self.fc_reid_std(x_reid.view(x_reid.size(0), -1)) # 生成的是对角阵,正常应该是[256, 256],现在是256,就是取对角线
+
+        if self.training:
+            id_pred_std = torch.exp(id_pred_log_var / 2)
+            z = torch.normal(0, 1.0, size=(256,))[None].cuda()  # [None, 256]
+            id_pred = id_pred + z * id_pred_std
 
         if self.training:
             id_labels = labels[:, 1]            
@@ -307,8 +312,8 @@ class DNFNet2Head(nn.Module):
                 id_pred[id_labels==-2] = self.bgnormalize(id_pred[id_labels==-2])
             else:
                 id_pred = self.normalize(id_pred)
+
         id_pred = F.normalize(id_pred)
-        
         part_id_pred = None
         if part_feats is not None:
             part_id_pred = []
