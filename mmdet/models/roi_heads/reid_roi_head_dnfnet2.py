@@ -325,6 +325,7 @@ class ReidRoIHeadDNFNet2(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
         RoI_Align_feat = bbox_results['RoI_Align_feat']
         part_id_pred = bbox_results['part_id_pred']
         scene_emb = bbox_results['scene_emb']
+        id_pred_log_var = bbox_results['id_pred_log_var']
 
         num_proposals_per_img = tuple(len(p) for p in proposals)
         rois = rois.split(num_proposals_per_img, 0)
@@ -344,6 +345,9 @@ class ReidRoIHeadDNFNet2(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
 
         if crop_feats is not None:
             crop_feats = crop_feats.split(num_proposals_per_img, 0)
+        
+        if id_pred_log_var is not None:
+            id_pred_log_var = id_pred_log_var.split(num_proposals_per_img, 0)
 
         if self.bbox_head_cfg.type == 'CoLearningHead':
             id_pred2 = bbox_results['id_pred2']
@@ -352,36 +356,37 @@ class ReidRoIHeadDNFNet2(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
         # apply bbox post-processing to each image individually
         det_bboxes = []
         det_labels = []
-        # if self.bbox_head_cfg.type == 'CoLearningHead':
-        #     for i in range(len(proposals)):
-        #         det_bbox, det_label = self.bbox_head.get_bboxes(
-        #             rois[i],
-        #             cls_score[i],
-        #             bbox_pred[i],
-        #             id_pred[i],
-        #             id_pred2[i],
-        #             img_shapes[i],
-        #             scale_factors[i],
-        #             rescale=rescale,
-        #             cfg=rcnn_test_cfg)
-        #         det_bboxes.append(det_bbox)
-        #         det_labels.append(det_label)
-        # else:
-        for i in range(len(proposals)):
-            det_bbox, det_label = self.bbox_head.get_bboxes(
-                rois[i],
-                cls_score[i],
-                bbox_pred[i],
-                id_pred[i],
-                # RoI_Align_feat[i].view(RoI_Align_feat[i].shape[0], -1),  # [2048, 7, 7]
-                part_id_pred[i] if part_id_pred is not None else None,
-                img_shapes[i],
-                scale_factors[i],
-                rescale=rescale,
-                cfg=rcnn_test_cfg)
-            
+        if id_pred_log_var is not None and part_id_pred is None:
+            for i in range(len(proposals)):
+                det_bbox, det_label = self.bbox_head.get_bboxes(
+                    rois[i],
+                    cls_score[i],
+                    bbox_pred[i],
+                    id_pred[i],
+                    # RoI_Align_feat[i].view(RoI_Align_feat[i].shape[0], -1),  # [2048, 7, 7]
+                    id_pred_log_var[i],
+                    img_shapes[i],
+                    scale_factors[i],
+                    rescale=rescale,
+                    cfg=rcnn_test_cfg)
             det_bboxes.append(det_bbox)
             det_labels.append(det_label)
+        elif id_pred_log_var is None and part_id_pred is not None:
+            for i in range(len(proposals)):
+                det_bbox, det_label = self.bbox_head.get_bboxes(
+                    rois[i],
+                    cls_score[i],
+                    bbox_pred[i],
+                    id_pred[i],
+                    # RoI_Align_feat[i].view(RoI_Align_feat[i].shape[0], -1),  # [2048, 7, 7]
+                    part_id_pred[i] if part_id_pred is not None else None,
+                    img_shapes[i],
+                    scale_factors[i],
+                    rescale=rescale,
+                    cfg=rcnn_test_cfg)
+                det_bboxes.append(det_bbox)
+                det_labels.append(det_label)
+            
         return det_bboxes, det_labels
 
     def simple_test(self,

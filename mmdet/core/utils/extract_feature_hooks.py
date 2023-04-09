@@ -44,6 +44,7 @@ class ExtractFeatureHook(Hook):
         self.uncertainty_estimation = False
         self.use_part_feats = cfg.USE_PART_FEAT
         self.use_gfn = cfg.USE_GFN
+        self.use_feature_std = not cfg.USE_PART_FEAT
         
     
     def before_run(self, runner):
@@ -57,7 +58,7 @@ class ExtractFeatureHook(Hook):
         with torch.no_grad():
             print('feature extract from: ', self.pretrained_feature_file)
             if self.cfg.model.roi_head.bbox_head.type != 'CoLearningHead':
-                features, img_ids, person_ids = self.extract_features(
+                features, img_ids, person_ids, std_features, features_unnorm = self.extract_features(
                     runner.model, self.dataloader, self.dataloader.dataset, with_path=False, prefix="Extract: ", \
                     pretrained_feature_file=self.pretrained_feature_file)
                 if self.alliance_clustering or self.uncertainty_estimation:
@@ -68,6 +69,7 @@ class ExtractFeatureHook(Hook):
                     assert features.size(0) == self.dataloader.dataset.id_num
                     assert img_ids.size(0) == self.dataloader.dataset.id_num
                     assert person_ids.size(0) == self.dataloader.dataset.id_num
+                    assert std_features.size(0) == self.dataloader.dataset.id_num
                 if self.cfg.save_features:
                     torch.save(features, os.path.join("saved_file", "features.pth"))
                     torch.save(person_ids, os.path.join("saved_file", "person_ids.pth"))
@@ -77,8 +79,10 @@ class ExtractFeatureHook(Hook):
             top_features = torch.load(os.path.join("saved_file", "top_features.pth"))
             runner.model.module.roi_head.bbox_head.loss_reid._update_bottom_feature(bottom_features)
             runner.model.module.roi_head.bbox_head.loss_reid._update_top_feature(top_features)
-
-        runner.model.module.roi_head.bbox_head.loss_reid._update_feature(features)
+        
+        # if self.use_feature_std:
+        #     runner.model.module.roi_head.bbox_head.loss_reid._update_top_feature(top_features)
+        runner.model.module.roi_head.bbox_head.loss_reid._update_feature(features, features_unnorm, std_features)
         runner.model.module.roi_head.bbox_head.loss_reid._init_ids(img_ids)
         torch.save(img_ids, os.path.join("saved_file", "img_ids.pth"))
 
@@ -167,14 +171,17 @@ class ExtractFeatureHook(Hook):
             new_data = {'proposals':data['gt_bboxes'], 'img': data['img'], 'img_metas': data['img_metas'], 'use_crop':False}
             result = model(return_loss=False, rescale=False, **new_data)
             reid_features = torch.from_numpy(result[0][0][:, 5:5+256])
+            
             if self.use_part_feats:
                 bottom_feats = torch.from_numpy(result[0][0][:, 5+256:5+2*256])
                 top_feats = torch.from_numpy(result[0][0][:, 5+2*256:5+3*256])
             if self.use_gfn:
                 scene_feats = torch.from_numpy(result[0][0][:, 5+3*256:5+3*256+2048])
-
+            if self.use_feature_std:
+                std_feats = torch.from_numpy(result[0][0][:, 5+256:5+2*256])
+                
             if normalize:
-                reid_features = F.normalize(reid_features, p=2, dim=-1)
+                reid_features_norm = F.normalize(reid_features, p=2, dim=-1)
                 if self.use_part_feats:
                     bottom_feats = F.normalize(bottom_feats, p=2, dim=-1)
                     top_feats = F.normalize(top_feats, p=2, dim=-1)
@@ -186,11 +193,14 @@ class ExtractFeatureHook(Hook):
                     features = torch.zeros(2 * dataset.id_num, reid_features.shape[1])
                 else:
                     features = torch.zeros(dataset.id_num, reid_features.shape[1])
+                    features_norm = torch.zeros(dataset.id_num, reid_features_norm.shape[1])
                     if self.use_part_feats:
                         bottom_features = torch.zeros(dataset.id_num, bottom_feats.shape[1])
                         top_features = torch.zeros(dataset.id_num, top_feats.shape[1])
                     if self.use_gfn:
                         scene_features = torch.zeros(dataset.id_num, scene_feats.shape[1])
+                    if self.use_feature_std:
+                        std_features = torch.zeros(dataset.id_num, std_feats.shape[1])
 
             #align gt box and predicted box
             result_boxes = torch.from_numpy(result[0][0][:, :4])
@@ -215,6 +225,7 @@ class ExtractFeatureHook(Hook):
                 gt_person_ids = gt_person_ids.repeat(2)
             
             features[gt_ids] = reid_features
+            features_norm[gt_ids] = reid_features_norm
             img_ids[gt_ids] = gt_img_ids
             person_ids[gt_ids] = gt_person_ids
             if self.use_part_feats:
@@ -222,7 +233,9 @@ class ExtractFeatureHook(Hook):
                 top_features[gt_ids] = top_feats
             if self.use_gfn:
                 scene_features[gt_ids] = scene_feats
-                
+            if self.use_feature_std:
+                std_features[gt_ids] = std_feats
+            
             prog_bar.update()
 
         #restore model status
@@ -249,13 +262,19 @@ class ExtractFeatureHook(Hook):
             # distributed: gather features from all GPUs
             all_features = all_gather_tensor(features.cuda(), save_memory=save_memory)
             all_features = all_features.cpu()[: len(dataset)]
+            all_features_norm = all_gather_tensor(features_norm.cuda(), save_memory=save_memory)
+            all_features_norm = all_features_norm.cpu()[: len(dataset)]
             all_img_ids = all_gather_tensor(img_ids.cuda(), save_memory=save_memory)
             all_img_ids = all_img_ids.cpu()[: len(dataset)]
             all_person_ids = all_gather_tensor(person_ids.cuda(), save_memory=save_memory)
             all_person_ids = all_person_ids.cpu()[: len(dataset)]
+            all_std_features = all_gather_tensor(std_features.cuda(), save_memory=save_memory)
+            all_std_features = all_std_features.cpu()[: len(dataset)]
         else:
             all_features = features
             all_img_ids = img_ids
             all_person_ids = person_ids
+            all_std_features = std_features
+            all_features_norm = features_norm
 
-        return all_features, img_ids, person_ids
+        return all_features_norm, img_ids, person_ids, all_std_features, all_features

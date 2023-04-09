@@ -53,8 +53,8 @@ class Quaduplet2Loss(nn.Module):
         bg = []
         targets_new = []
         # indexs_new = []
-        
-        # inputs = F.normalize(inputs)
+        inputs = F.normalize(inputs)
+        # inputs /= inputs.norm()
         for i in range(len(targets)):
             if targets[i] < 0:
                 bg.append(inputs[i])

@@ -60,6 +60,7 @@ class ClusterHook(Hook):
             self.epoch += 1
             return
         memory_features, memory_feature2s = [], []
+        memory_features_mean, memory_features_std = [], []
         start_ind = 0
         for idx, dataset in enumerate(self.datasets):
             if self.cfg.testing:
@@ -71,6 +72,19 @@ class ClusterHook(Hook):
                 .clone()
                 .cpu()
             )
+            memory_features_std.append(
+                runner.model.module.roi_head.bbox_head.loss_reid
+                .features_std[start_ind : start_ind + dataset.id_num]
+                .clone()
+                .cpu() 
+            )
+            memory_features_mean.append(
+                runner.model.module.roi_head.bbox_head.loss_reid
+                .features_unnorm[start_ind : start_ind + dataset.id_num]
+                .clone()
+                .cpu() 
+            )
+            
             start_ind += dataset.id_num
 
             if self.uncertainty_estimation:
@@ -124,11 +138,9 @@ class ClusterHook(Hook):
             start_pid += max(labels) + 1
         memory_labels = torch.cat(memory_labels).view(-1)
         
-        # if self.use_k_reciprocal_nearest:
-        #     uncertainty = re_ranking_for_instance(labels, memory_features, self.cfg.PSEUDO_LABELS.K)
-
         if hasattr(runner.model.module.roi_head.bbox_head.loss_reid, "use_cluster_memory"):
-            means, stds = self.get_gaussion_distributation(memory_features[0], memory_labels)
+            # means, stds = self.get_gaussion_distributation(memory_features[0], memory_labels)
+            means, stds = self.GMM(memory_features[0], memory_features_std[0], memory_labels)
             if hasattr(runner.model.module.roi_head.bbox_head.loss_reid, "cluster_mean"):
                 runner.model.module.roi_head.bbox_head.loss_reid._del_cluster()
             runner.model.module.roi_head.bbox_head.loss_reid._init_cluster(means.cuda(), stds.cuda())
@@ -166,6 +178,19 @@ class ClusterHook(Hook):
             # for idx in range(10):
             #     sim = self.sampling(cluster_distri[ul.item()]["mean"], cluster_distri[ul.item()]["std"])
             #     sims.append(sim)
+        means = torch.stack(means, dim=0)
+        stds = torch.stack(stds, dim=0)
+        return means, stds
+
+    def GMM(self, memory_features, memory_features_std, memory_labels):
+        unique_labels = torch.unique(memory_labels)
+        memory_features_std = torch.exp(memory_features_std)
+        means, stds = [], []
+        for ul in unique_labels:
+            gmm_mean = torch.mean(memory_features[memory_labels == ul], dim=0)
+            gmm_var = torch.mean(memory_features_std[memory_labels == ul], dim=0)
+            means.append(gmm_mean)
+            stds.append(gmm_var)
         means = torch.stack(means, dim=0)
         stds = torch.stack(stds, dim=0)
         return means, stds
