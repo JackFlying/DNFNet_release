@@ -61,15 +61,15 @@ class ExtractFeatureHook(Hook):
                 features, img_ids, person_ids, std_features, features_unnorm = self.extract_features(
                     runner.model, self.dataloader, self.dataloader.dataset, with_path=False, prefix="Extract: ", \
                     pretrained_feature_file=self.pretrained_feature_file)
-                if self.alliance_clustering or self.uncertainty_estimation:
-                    assert features.size(0) == 2 * self.dataloader.dataset.id_num
-                    assert img_ids.size(0) == 2 * self.dataloader.dataset.id_num
-                    assert person_ids.size(0) == 2 * self.dataloader.dataset.id_num
-                else:
-                    assert features.size(0) == self.dataloader.dataset.id_num
-                    assert img_ids.size(0) == self.dataloader.dataset.id_num
-                    assert person_ids.size(0) == self.dataloader.dataset.id_num
-                    assert std_features.size(0) == self.dataloader.dataset.id_num
+                # if self.alliance_clustering or self.uncertainty_estimation:
+                #     assert features.size(0) == 2 * self.dataloader.dataset.id_num
+                #     assert img_ids.size(0) == 2 * self.dataloader.dataset.id_num
+                #     assert person_ids.size(0) == 2 * self.dataloader.dataset.id_num
+                # else:
+                #     assert features.size(0) == self.dataloader.dataset.id_num
+                #     assert img_ids.size(0) == self.dataloader.dataset.id_num
+                #     assert person_ids.size(0) == self.dataloader.dataset.id_num
+                #     assert std_features.size(0) == self.dataloader.dataset.id_num
                 if self.cfg.save_features:
                     torch.save(features, os.path.join("saved_file", "features.pth"))
                     torch.save(person_ids, os.path.join("saved_file", "person_ids.pth"))
@@ -82,7 +82,10 @@ class ExtractFeatureHook(Hook):
         
         # if self.use_feature_std:
         #     runner.model.module.roi_head.bbox_head.loss_reid._update_top_feature(top_features)
-        runner.model.module.roi_head.bbox_head.loss_reid._update_feature(features, features_unnorm, std_features)
+        if std_features is not None:
+            runner.model.module.roi_head.bbox_head.loss_reid._update_feature(features, features_unnorm, std_features)
+        else:
+            runner.model.module.roi_head.bbox_head.loss_reid._update_feature(features)
         runner.model.module.roi_head.bbox_head.loss_reid._init_ids(img_ids)
         torch.save(img_ids, os.path.join("saved_file", "img_ids.pth"))
 
@@ -268,13 +271,17 @@ class ExtractFeatureHook(Hook):
             all_img_ids = all_img_ids.cpu()[: len(dataset)]
             all_person_ids = all_gather_tensor(person_ids.cuda(), save_memory=save_memory)
             all_person_ids = all_person_ids.cpu()[: len(dataset)]
-            all_std_features = all_gather_tensor(std_features.cuda(), save_memory=save_memory)
-            all_std_features = all_std_features.cpu()[: len(dataset)]
+            if self.use_feature_std:
+                all_std_features = all_gather_tensor(std_features.cuda(), save_memory=save_memory)
+                all_std_features = all_std_features.cpu()[: len(dataset)]
         else:
             all_features = features
             all_img_ids = img_ids
             all_person_ids = person_ids
-            all_std_features = std_features
             all_features_norm = features_norm
+            if self.use_feature_std:
+                all_std_features = std_features
+            else:
+                all_std_features = None
 
         return all_features_norm, img_ids, person_ids, all_std_features, all_features

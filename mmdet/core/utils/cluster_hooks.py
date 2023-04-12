@@ -60,6 +60,10 @@ class ClusterHook(Hook):
             self.epoch += 1
             return
         memory_features, memory_feature2s = [], []
+        if hasattr(runner.model.module.roi_head.bbox_head.loss_reid, "features_std") is True:
+            use_gaussion = True
+        else:
+            use_gaussion = False
         memory_features_mean, memory_features_std = [], []
         start_ind = 0
         for idx, dataset in enumerate(self.datasets):
@@ -72,18 +76,19 @@ class ClusterHook(Hook):
                 .clone()
                 .cpu()
             )
-            memory_features_std.append(
-                runner.model.module.roi_head.bbox_head.loss_reid
-                .features_std[start_ind : start_ind + dataset.id_num]
-                .clone()
-                .cpu() 
-            )
-            memory_features_mean.append(
-                runner.model.module.roi_head.bbox_head.loss_reid
-                .features_unnorm[start_ind : start_ind + dataset.id_num]
-                .clone()
-                .cpu() 
-            )
+            if use_gaussion:
+                memory_features_std.append(
+                    runner.model.module.roi_head.bbox_head.loss_reid
+                    .features_std[start_ind : start_ind + dataset.id_num]
+                    .clone()
+                    .cpu() 
+                )
+                memory_features_mean.append(
+                    runner.model.module.roi_head.bbox_head.loss_reid
+                    .features_unnorm[start_ind : start_ind + dataset.id_num]
+                    .clone()
+                    .cpu() 
+                )
             
             start_ind += dataset.id_num
 

@@ -174,12 +174,17 @@ class DNFNet2Head(nn.Module):
             
         self.feature_h = 14
         self.feature_w = 6
-        self.fc_reid = nn.Linear(in_channels * self.feature_h * self.feature_w, 256)
-        self.fc_reid_std = nn.Linear(in_channels * self.feature_h * self.feature_w, 256)
+        self.fc_reid = nn.Sequential(
+                            nn.Linear(in_channels * self.feature_h * self.feature_w, 256),
+                            # nn.BatchNorm1d(num_features=256, affine=False)
+                        )
+        self.fc_reid_std = nn.Sequential(
+                            nn.Linear(in_channels * self.feature_h * self.feature_w, 256),
+                            # nn.BatchNorm1d(num_features=256, affine=False)
+                        )
         self.fc_part_reid = nn.ModuleList([nn.Linear(in_channels * self.feature_h * self.feature_w // 2, 256),
                                         nn.Linear(in_channels * self.feature_h * self.feature_w // 2, 256),
                                     ])
-        self.std_normalize = nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine)
         if self.norm_type is 'protonorm':
             self.normalize = PrototypeNorm1d(256)
             self.normalize_part = nn.ModuleList([PrototypeNorm1d(256), PrototypeNorm1d(256)])
@@ -189,9 +194,13 @@ class DNFNet2Head(nn.Module):
             self.normalize = nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine)
             self.normalize_part = nn.ModuleList([nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine), \
                                                 nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine)])
+            
             self.bgnormalize = nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine)
             self.bgnormalize_part = nn.ModuleList([nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine), \
                                     nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine)])
+
+            self.normalize_std = nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine)
+            self.bgnormalize_std = nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine)
         self.proposal_score_max = False
 
     def init_weights(self):
@@ -285,11 +294,6 @@ class DNFNet2Head(nn.Module):
         x_reid = x
         id_pred = self.fc_reid(x_reid.view(x_reid.size(0), -1))
         id_pred_log_var = self.fc_reid_std(x_reid.view(x_reid.size(0), -1)) # 生成的是对角阵,正常应该是[256, 256],现在是256,就是取对角线
-
-        # if self.training:
-        #     id_pred_std = torch.exp(id_pred_log_var / 2)
-        #     z = torch.normal(0, 1.0, size=(256,))[None].cuda()  # [None, 256]
-        #     id_pred = id_pred + z * id_pred_std
         
         if self.training:
             id_labels = labels[:, 1]            
@@ -309,6 +313,8 @@ class DNFNet2Head(nn.Module):
             if self.training:
                 id_pred[id_labels!=-2] = self.normalize(id_pred[id_labels!=-2])
                 id_pred[id_labels==-2] = self.bgnormalize(id_pred[id_labels==-2])
+                id_pred_log_var[id_labels!=-2] = self.normalize_std(id_pred_log_var[id_labels!=-2])
+                id_pred_log_var[id_labels==-2] = self.bgnormalize_std(id_pred_log_var[id_labels==-2])
             else:
                 id_pred = self.normalize(id_pred)
 
