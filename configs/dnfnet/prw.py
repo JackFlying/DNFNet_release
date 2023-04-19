@@ -3,7 +3,7 @@ _base_ = [
     '../_base_/datasets/coco_reid_unsup_prw.py',
     '../_base_/schedules/schedule_1x_reid_norm_base.py', '../_base_/default_runtime.py'
 ]
-TEST = True
+TEST = False
 USE_PART_FEAT = True
 GLOBAL_WEIGHT = 0.9
 CO_LEARNING = False
@@ -11,6 +11,23 @@ UNCERTAINTY = True
 HARD_MINING = True
 USE_GFN = False
 model = dict(
+    # backbone=dict(
+    #     type='ResNet',
+    #     depth=50,
+    #     dilations=(1, 1, 1, 1),
+    #     out_indices=(1, 2, 3),
+    #     strides=(1, 2, 2, 1),
+    #     num_stages=4,
+    #     frozen_stages=1,
+    #     norm_cfg=dict(type='BN', requires_grad=False),
+    #     norm_eval=True,
+    #     style='caffe'),
+    # neck=dict(
+    #     type='FPNs16C45add',
+    #     in_channels=[512, 1024, 2048],
+    #     out_channels=1024,
+    #     use_dconv=True,
+    #     kernel1=True),
     roi_head=dict(
         type='ReidRoIHeadDNFNet',
         use_gfn=USE_GFN,
@@ -146,7 +163,7 @@ val_pipeline = [
         ])
 ]
 data = dict(
-    samples_per_gpu=5,
+    samples_per_gpu=4,
     workers_per_gpu=8,
     train=dict(pipeline=train_pipeline, query_test_pipeline=None),
     train_cluster=dict(pipeline=val_pipeline, query_test_pipeline=None),

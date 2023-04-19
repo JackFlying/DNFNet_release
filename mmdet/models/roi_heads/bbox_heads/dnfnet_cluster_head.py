@@ -18,7 +18,7 @@ from mmcv.ops import DeformConv2dPack
 from mmcv.cnn import ConvModule, bias_init_with_prob, normal_init
 
 @HEADS.register_module()
-class DNFNet2Head(nn.Module):
+class DNFNet2ClusterHead(nn.Module):
     '''for person search, output reid features'''
     """Simplest RoI head, with only two fc layers for classification and
     regression respectively."""
@@ -78,7 +78,7 @@ class DNFNet2Head(nn.Module):
                  triplet_instance_weight=1,
                  gfn_config=None,
                  norm_type='l2norm'):
-        super(DNFNet2Head, self).__init__()
+        super(DNFNet2ClusterHead, self).__init__()
         assert with_cls or with_reg
         self.with_avg_pool = with_avg_pool
         self.with_cls = with_cls
@@ -94,7 +94,7 @@ class DNFNet2Head(nn.Module):
         self.bbox_coder = build_bbox_coder(bbox_coder)
         self.loss_cls = build_loss(loss_cls)
         self.loss_bbox = build_loss(loss_bbox)
-        self.loss_reid = HybridMemoryMultiFocalPercentDnfnet(num_features, id_num, temp=temperature, momentum=momentum, testing=testing, cluster_top_percent=cluster_top_percent, \
+        self.loss_reid = HybridMemoryMultiFocalPercentCluster(num_features, id_num, temp=temperature, momentum=momentum, testing=testing, cluster_top_percent=cluster_top_percent, \
                                                         instance_top_percent=instance_top_percent, use_cluster_hard_loss=use_cluster_hard_loss,
                                                         use_instance_hard_loss=use_instance_hard_loss, use_hybrid_loss=use_hybrid_loss, use_IoU_loss=use_IoU_loss, \
                                                         use_IoU_memory=use_IoU_memory, IoU_loss_clip=IoU_loss_clip, IoU_memory_clip=IoU_memory_clip, \
@@ -294,7 +294,6 @@ class DNFNet2Head(nn.Module):
         x_reid = x
         id_pred = self.fc_reid(x_reid.view(x_reid.size(0), -1))
         id_pred_log_var = self.fc_reid_std(x_reid.view(x_reid.size(0), -1)) # 生成的是对角阵,正常应该是[256, 256],现在是256,就是取对角线
-        id_pred = F.normalize(id_pred)
         
         if self.training:
             id_labels = labels[:, 1]            
@@ -552,10 +551,10 @@ class DNFNet2Head(nn.Module):
         
         rid_pred = id_pred[id_labels!=-2]   # [B, 256]
         rid_labels = id_labels[id_labels!=-2]
-        # rid_pred_log_var = id_pred_log_var[id_labels!=-2]
+        rid_pred_log_var = id_pred_log_var[id_labels!=-2]
         rpart_feats = part_feats[id_labels!=-2] if part_feats is not None else None
         
-        memory_loss = self.loss_reid(rid_pred, rid_labels, IoU, rpart_feats, top_IoU, bottom_IoU, pos_is_gt_list, None)
+        memory_loss = self.loss_reid(rid_pred, rid_labels, IoU, rpart_feats, top_IoU, bottom_IoU, pos_is_gt_list, rid_pred_log_var)
         memory_loss['global_cluster_hard_loss'] *= self.global_weight
         memory_loss["part_cluster_hard_loss"] *= (1 - self.global_weight)
         losses.update(memory_loss)

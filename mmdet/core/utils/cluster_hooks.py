@@ -101,104 +101,75 @@ class ClusterHook(Hook):
                 )
     
             if not self.part_based_uncertainty:
-                pseudo_labels, label_centers = self.label_generator(
+                pseudo_labels, label_centers, pseudo_blabels, pseudo_tlabels = self.label_generator(
                     memory_features=memory_features, 
                     image_inds=runner.model.module.roi_head.bbox_head.loss_reid.idx[:len(memory_features[0])].clone().cpu(),
                     cfg=self.cfg
                 )
             else:
                 self.cfg.PSEUDO_LABELS.part_feat.use_part_feat = True   # 为了防止新的epoch自动变成0
-                pseudo_labels, label_centers = self.label_generator(
+                pseudo_labels, label_centers, pseudo_blabels, pseudo_tlabels = self.label_generator(
                     memory_features=memory_features, 
                     image_inds=runner.model.module.roi_head.bbox_head.loss_reid.idx[:len(memory_features[0])].clone().cpu(),
                     cfg=self.cfg
                 )
                 if self.part_based_uncertainty:
                     self.cfg.PSEUDO_LABELS.part_feat.use_part_feat = False
-                    pseudo_label2s, _ = self.label_generator(
+                    pseudo_label2s, _, _, _ = self.label_generator(
                         memory_features=memory_features,
                         image_inds=runner.model.module.roi_head.bbox_head.loss_reid.idx[:len(memory_features[0])].clone().cpu(),
                         cfg=self.cfg
                     )
-                    
                     uncertainty = self.get_uncertainty_by_part(pseudo_labels, pseudo_label2s, memory_features)
-                    torch.save(uncertainty, os.path.join("saved_file", "uncertainty.pth"))
                     if self.cfg.PSEUDO_LABELS.hard_mining.use_hard_mining:
-                        pseudo_labels, label_mask = transfer_label_noise_to_outlier(uncertainty, pseudo_labels[0])
-                        torch.save(label_mask, os.path.join("saved_file", "label_mask.pth"))
+                        pseudo_labels = transfer_label_noise_to_outlier(uncertainty, pseudo_labels[0])
+                    weight = get_weight_by_uncertainty(uncertainty, pseudo_labels[0])
+                    torch.save(weight, os.path.join("saved_file", "weight.pth"))
                     
                     # pseudo_labels = RefineClusterProcess(pseudo_labels[0], pseudo_label2s[0], 0.4)
-                    # get_is_known_list(pseudo_labels[0]) # For pseudo labels
-                    get_is_known_list(give_unknown_id())  # For gt labels
-                    # label_mask = outlier_mask(pseudo_labels[0])
+                    # get_is_known_list(give_unknown_id())  # For gt labels
 
             torch.save(pseudo_labels, os.path.join("saved_file", "pseudo_labels.pth"))
-        
-        # update memory labels
-        memory_labels= []
+
+        memory_labels, memory_blabels, memory_tlabels = [], [], []
         start_pid = 0
         for idx, dataset in enumerate(self.datasets):
             labels = pseudo_labels[idx]
             memory_labels.append(torch.LongTensor(labels) + start_pid)
+            if self.part_based_uncertainty and pseudo_blabels != []:
+                blabels = pseudo_blabels[idx]
+                tlabels = pseudo_tlabels[idx]
+                memory_blabels.append(torch.LongTensor(blabels) + start_pid)
+                memory_tlabels.append(torch.LongTensor(tlabels) + start_pid)
+            else:
+                blabels = pseudo_labels[idx]
+                tlabels = pseudo_labels[idx]
+                memory_blabels.append(torch.LongTensor(blabels) + start_pid)
+                memory_tlabels.append(torch.LongTensor(tlabels) + start_pid)
+                
             start_pid += max(labels) + 1
         memory_labels = torch.cat(memory_labels).view(-1)
+        if self.part_based_uncertainty:
+            memory_blabels = torch.cat(memory_blabels).view(-1)
+            memory_tlabels = torch.cat(memory_tlabels).view(-1)
         
         if hasattr(runner.model.module.roi_head.bbox_head.loss_reid, "use_cluster_memory"):
-            # means, stds = self.get_gaussion_distributation(memory_features[0], memory_labels)
-            means, stds = self.GMM(memory_features[0], memory_features_std[0], memory_labels)
+            # means, stds = get_gaussion_distributation(memory_features[0], memory_labels)
+            means, stds = GMM(memory_features[0], memory_features_std[0], memory_labels)
             if hasattr(runner.model.module.roi_head.bbox_head.loss_reid, "cluster_mean"):
                 runner.model.module.roi_head.bbox_head.loss_reid._del_cluster()
             runner.model.module.roi_head.bbox_head.loss_reid._init_cluster(means.cuda(), stds.cuda())
         
         runner.model.module.roi_head.bbox_head.loss_reid._update_label(memory_labels)
+        # if self.part_based_uncertainty:
+            # runner.model.module.roi_head.bbox_head.loss_reid._update_blabel(memory_blabels)
+            # runner.model.module.roi_head.bbox_head.loss_reid._update_tlabel(memory_tlabels)
+            # self.logger.info('bottom pseudo label range: '+ str(memory_blabels.min())+ str(memory_blabels.max()))
+            # self.logger.info('top pseudo label range: '+ str(memory_tlabels.min())+ str(memory_tlabels.max()))
         
         self.logger.info('pseudo label range: '+ str(memory_labels.min())+ str(memory_labels.max()))
         self.logger.info("Finished updating pseudo label")
         self.epoch += 1
-
-    def sampling(self, mean, std):
-        # import ipdb;    ipdb.set_trace()
-        sample = mean + torch.randn(256) * std
-        cos_sim = torch.cosine_similarity(mean[None], sample[None]).mean()
-        euclid_sim = F.pairwise_distance(mean, sample, p=2).mean()
-        return euclid_sim
-
-    def get_mean_conv(self, input_vec):
-        # import ipdb;    ipdb.set_trace()
-        mean = torch.mean(input_vec, axis=0)
-        x = input_vec - mean
-        cov_matrix = torch.matmul(x.T, x) / (x.shape[0] - 1 if x.shape[0] > 1 else 1)
-        return mean, cov_matrix        
-
-    def get_gaussion_distributation(self, memory_features, memory_labels):
-        unique_labels = torch.unique(memory_labels)
-        cluster_distri = {}
-        means, stds = [], []
-        for ul in unique_labels:
-            # cluster_distri[ul.item()] = self.get_mean_conv(memory_features[memory_labels == ul])
-            mean, std = self.get_mean_conv(memory_features[memory_labels == ul])
-            means.append(mean)
-            stds.append(std)
-            # sims = []
-            # for idx in range(10):
-            #     sim = self.sampling(cluster_distri[ul.item()]["mean"], cluster_distri[ul.item()]["std"])
-            #     sims.append(sim)
-        means = torch.stack(means, dim=0)
-        stds = torch.stack(stds, dim=0)
-        return means, stds
-
-    def GMM(self, memory_features, memory_features_std, memory_labels):
-        unique_labels = torch.unique(memory_labels)
-        memory_features_std = torch.exp(memory_features_std)
-        means, stds = [], []
-        for ul in unique_labels:
-            gmm_mean = torch.mean(memory_features[memory_labels == ul], dim=0)
-            gmm_var = torch.mean(memory_features_std[memory_labels == ul], dim=0)
-            means.append(gmm_mean)
-            stds.append(gmm_var)
-        means = torch.stack(means, dim=0)
-        stds = torch.stack(stds, dim=0)
-        return means, stds
 
     def get_softlabel_by_part(self, pseudo_labels, pseudo_label2s, memory_features):
 
@@ -231,6 +202,7 @@ class ClusterHook(Hook):
         iou_mat = compute_label_iou_matrix(pseudo_label2s, pseudo_labels)
         norm_iou_mat = (iou_mat.t() / iou_mat.t().sum(0)).t()   # [pseudo_label2s_numbers, pseudo_labels_numbers]
         uncertainty = norm_iou_mat.t()[pseudo_labels[0]][torch.arange(len(pseudo_labels[0])), pseudo_label2s[0]]
+        # torch.save(uncertainty, os.path.join("saved_file", "uncertainty.pth"))
         # pred_temp = 30
         # label_center2s = generate_cluster_features(pseudo_label2s[0].tolist(), memory_features[0])
         # probs_perv = extract_probabilities(memory_features[0], label_center2s, pred_temp)
@@ -245,7 +217,6 @@ class ClusterHook(Hook):
         # hard_iou_labels = compute_sample_softlabels(pseudo_label2s, pseudo_labels, "iou", "original")
         # sample_soft_labels = beta * hard_iou_labels + (1.0 - beta) * prob_soft_labels   # 软硬标签的综合程度, [N, pseudo_labels_numbers]
         # uncertainty = sample_soft_labels[torch.arange(len(pseudo_labels[0])), pseudo_labels[0]]
-
         uncertainty_threshold = self.cfg.PSEUDO_LABELS.hard_mining.uncertainty_threshold
         self.logger.info("uncertainty > uncertainty_threshold: " + str(len(uncertainty[uncertainty > uncertainty_threshold])))
         self.logger.info("uncertainty < uncertainty_threshold: " + str(len(uncertainty[uncertainty <= uncertainty_threshold])))
@@ -253,6 +224,43 @@ class ClusterHook(Hook):
             uncertainty[uncertainty > uncertainty_threshold] = 1
             uncertainty[uncertainty <= uncertainty_threshold] = 0
         return uncertainty
+
+def get_weight_by_uncertainty(uncertainty, labels):
+    labels = torch.tensor(labels)
+    unique_labels = torch.unique(labels)
+    for ul in unique_labels:
+        uncertainty[labels == ul] = F.softmax(uncertainty[labels == ul], dim=-1)
+    return uncertainty
+
+def get_mean_conv(input_vec):
+    mean = torch.mean(input_vec, axis=0)
+    x = input_vec - mean
+    cov_matrix = torch.matmul(x.T, x) / (x.shape[0] - 1 if x.shape[0] > 1 else 1)
+    return mean, cov_matrix 
+
+def get_gaussion_distributation(memory_features, memory_labels):
+    unique_labels = torch.unique(memory_labels)
+    means, stds = [], []
+    for ul in unique_labels:
+        mean, std = get_mean_conv(memory_features[memory_labels == ul])
+        means.append(mean)
+        stds.append(std)
+    means = torch.stack(means, dim=0)
+    stds = torch.stack(stds, dim=0)
+    return means, stds
+
+def GMM(memory_features, memory_features_std, memory_labels):
+    unique_labels = torch.unique(memory_labels)
+    memory_features_std = torch.exp(memory_features_std)
+    means, stds = [], []
+    for ul in unique_labels:
+        gmm_mean = torch.mean(memory_features[memory_labels == ul], dim=0)
+        gmm_var = torch.mean(memory_features_std[memory_labels == ul], dim=0)
+        means.append(gmm_mean)
+        stds.append(gmm_var)
+    means = torch.stack(means, dim=0)
+    stds = torch.stack(stds, dim=0)
+    return means, stds
 
 def transfer_outlier_label(labels):
     """
@@ -322,20 +330,6 @@ def RefineClusterProcess(Reference_Cluster_result, Target_Cluster_result, divide
             cluster_nums += 1
     return [Final_Cluster]
 
-def outlier_mask(labels):
-    """
-        outliers变成False
-    """
-    label_count = collections.defaultdict(list)
-    mask = torch.ones(len(labels)).bool()
-    for i, label in enumerate(labels):
-        label_count[label].append(i)
-        
-    for i, label in enumerate(labels):
-        if len(label_count[label]) == 1:
-            mask[i] = False
-    return mask
-
 def give_unknown_id():
     gt_person_ids = torch.load(os.path.join("saved_file", "person_ids.pth"))
     max_ids = gt_person_ids.max()
@@ -380,7 +374,8 @@ def transfer_label_noise_to_outlier(uncertaintys, labels):
             mask[i] = False
     new_labels = reassignment_labels(new_labels.tolist())
     print("new num of classes", max(new_labels) + 1)
-    return [new_labels], mask
+    torch.save(mask, os.path.join("saved_file", "mask.pth"))
+    return [new_labels]
     
     # hard sample伪标签保持为-1
     # for i, (uncertainty, label) in enumerate(zip(uncertaintys, labels)):

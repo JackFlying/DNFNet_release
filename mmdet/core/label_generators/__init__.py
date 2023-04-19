@@ -72,8 +72,9 @@ class LabelGenerator(object):
     @torch.no_grad()
     def __call__(self, cuda=True, memory_features=None, image_inds=None, epoch=0, eps=None, **kwargs):
 
-        all_labels = []
+        all_labels, all_blabels, all_tlabels = [], [], []
         all_centers = []
+        
 
         for idx, (data_loader, dataset) in enumerate(
             zip(self.data_loaders, self.datasets)
@@ -118,7 +119,7 @@ class LabelGenerator(object):
                     )
                     self.eps = tmp_eps
                 else:
-                    labels, centers, num_classes, indep_thres = self.__factory[
+                    labels, centers, num_classes, indep_thres, blabels, tlabels = self.__factory[
                         self.cluster_type
                     ](
                         kwargs['cfg'],
@@ -162,6 +163,9 @@ class LabelGenerator(object):
 
             all_labels.append(labels.tolist())
             all_centers.append(centers)
+            if blabels is not None:
+                all_tlabels.append(tlabels.tolist())
+                all_blabels.append(blabels.tolist())
 
         self.cfg.PSEUDO_LABELS.cluster_num = self.num_classes
 
@@ -169,7 +173,7 @@ class LabelGenerator(object):
                 self.print_label_summary(label)
 
 
-        return all_labels, all_centers
+        return all_labels, all_centers, all_blabels, all_tlabels
 
     def print_label_summary(self, pseudo_labels):
         # statistics of clusters and un-clustered instances

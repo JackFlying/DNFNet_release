@@ -11,6 +11,23 @@ UNCERTAINTY = True
 HARD_MINING = True
 USE_GFN = False
 model = dict(
+    backbone=dict(
+        type='ResNet',
+        depth=50,
+        dilations=(1, 1, 1, 1),
+        out_indices=(1, 2, 3),
+        strides=(1, 2, 2, 1),
+        num_stages=4,
+        frozen_stages=1,
+        norm_cfg=dict(type='BN', requires_grad=False),
+        norm_eval=True,
+        style='caffe'),
+    neck=dict(
+        type='FPNs16C45add',
+        in_channels=[512, 1024, 2048],
+        out_channels=1024,
+        use_dconv=True,
+        kernel1=True),
     roi_head=dict(
         type='ReidRoIHeadDNFNet',
         use_gfn=USE_GFN,
@@ -40,10 +57,10 @@ model = dict(
             use_IoU_memory=False,
             use_uncertainty_loss=UNCERTAINTY,
             use_hard_mining=HARD_MINING,
-            norm_type='protonorm',    # ['l2norm', 'protonorm', 'batchnorm']
+            norm_type='l2norm',    # ['l2norm', 'protonorm', 'batchnorm']
             seperate_norm=False,
             use_bn_affine=False,
-            update_method='max_iou',    # ['momentum', 'iou', 'max_iou']
+            update_method='momentum',    # ['momentum', 'iou', 'max_iou']
             co_learning=CO_LEARNING,
             use_max_IoU_bbox=False,
             IoU_loss_clip=[0.7, 1.0],
@@ -146,7 +163,7 @@ val_pipeline = [
         ])
 ]
 data = dict(
-    samples_per_gpu=5,
+    samples_per_gpu=4,
     workers_per_gpu=8,
     train=dict(pipeline=train_pipeline, query_test_pipeline=None),
     train_cluster=dict(pipeline=val_pipeline, query_test_pipeline=None),
@@ -187,7 +204,7 @@ PSEUDO_LABELS = dict(
     iters=2,
     lambda_scene=0,    # default: 0.3
     lambda_person=0.1,
-    context_method='scene',    # sum, max, zero
+    context_method='zero',    # sum, max, zero
     threshold=0.5,
     use_post_process=False,
     filter_threshold=0.2,

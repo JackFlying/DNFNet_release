@@ -22,12 +22,15 @@ except Exception as e:
 
 ANN_THRESHOLD = 70000
 
-def clust_rank(mat, initial_rank=None, distance='cosine'):  # cosine: 1 - cos
+def clust_rank(mat, bottom_mat, top_mat, initial_rank=None, distance='cosine', cfg=None):  # cosine: 1 - cos
     s = mat.shape[0]
     if initial_rank is not None:
         orig_dist = np.array([])
     elif s <= ANN_THRESHOLD:
         orig_dist = metrics.pairwise.pairwise_distances(mat, mat, metric=distance)
+        bottom_orig_dist = metrics.pairwise.pairwise_distances(bottom_mat, bottom_mat, metric=distance)
+        top_orig_dist = metrics.pairwise.pairwise_distances(top_mat, top_mat, metric=distance)
+        orig_dist = cfg.PSEUDO_LABELS.part_feat.global_weight * orig_dist + cfg.PSEUDO_LABELS.part_feat.part_weight * (bottom_orig_dist + top_orig_dist)
         np.fill_diagonal(orig_dist, 1e12)
         initial_rank = np.argmin(orig_dist, axis=1) # 这里计算相似度越高就为0
     else:
@@ -86,16 +89,16 @@ def cool_mean(M, u):
     umat = sp.csr_matrix((np.ones(s, dtype='float32'), (np.arange(0, s), u)), shape=(s, len(un)))
     return (umat.T @ M) / nf[..., np.newaxis]
 
-
-def get_merge(c, u, data):
+def get_merge(c, u, data, bottom_data, top_data):
     if len(c) != 0:
         _, ig = np.unique(c, return_inverse=True)
         c = u[ig]
     else:
         c = u
-
     mat = cool_mean(data, c)
-    return c, mat
+    bmat = cool_mean(bottom_data, c)
+    tmat = cool_mean(top_data, c)
+    return c, mat, bmat, tmat
 
 
 def update_adj(adj, d):
@@ -121,7 +124,7 @@ def req_numclust(c, data, req_clust, distance):
     return c_
 
 
-def FINCH(data, initial_rank=None, req_clust=None, distance='cosine', ensure_early_exit=True, verbose=True):
+def FINCH(data_list, initial_rank=None, req_clust=None, distance='cosine', ensure_early_exit=True, verbose=True, cfg=None):
     """ FINCH clustering algorithm.
     :param data: Input matrix with features in rows.
     :param initial_rank: Nx1 first integer neighbor indices (optional).
@@ -144,17 +147,23 @@ def FINCH(data, initial_rank=None, req_clust=None, distance='cosine', ensure_ear
     Karlsruhe Institute of Technology (KIT)
     """
     # Cast input data to float32
+    data, bottom_data, top_data = data_list
     data = np.array(data.cpu())
+    bottom_data = np.array(bottom_data.cpu())
+    top_data = np.array(top_data.cpu())
+    
     if initial_rank is not None:
         initial_rank = np.array(initial_rank.cpu())
     
     data = data.astype(np.float32)
+    bottom_data = bottom_data.astype(np.float32)
+    top_data = top_data.astype(np.float32)
 
     min_sim = None
-    adj, orig_dist = clust_rank(data, initial_rank, distance)
+    adj, orig_dist = clust_rank(data, bottom_data, top_data, initial_rank, distance, cfg)
     initial_rank = None
     group, num_clust = get_clust(adj, [], min_sim)
-    c, mat = get_merge([], group, data)
+    c, mat, bmat, tmat = get_merge([], group, data, bottom_data, top_data) # 求聚类中心
 
     if verbose:
         print('Partition 0: {} clusters'.format(num_clust))
@@ -169,9 +178,9 @@ def FINCH(data, initial_rank=None, req_clust=None, distance='cosine', ensure_ear
     num_clust = [num_clust]
 
     while exit_clust > 1:
-        adj, orig_dist = clust_rank(mat, initial_rank, distance)
+        adj, orig_dist = clust_rank(mat, bmat, tmat, initial_rank, distance, cfg)
         u, num_clust_curr = get_clust(adj, orig_dist, min_sim)
-        c_, mat = get_merge(c_, u, data)
+        c_, mat, bmat, tmat = get_merge(c_, u, data, bottom_data, top_data)
 
         num_clust.append(num_clust_curr)
         c = np.column_stack((c, c_))
@@ -324,9 +333,9 @@ def get_hybrid_sim(inst_sim_matrix, split_num, person_sim, scene_sim, lambda_per
     return hybrid_sim_matrix, initial_rank
 
 @torch.no_grad()
-def label_generator_FINCH_context_single(iters, features, initial_rank, all_inds=None):
-
-    labels_set, num_classes_set, req_c = FINCH(features, initial_rank=initial_rank, req_clust=None, distance='cosine', ensure_early_exit=True, verbose=True)
+def label_generator_FINCH_context_single(cfg, iters, features_list, initial_rank, all_inds=None):
+    features = features_list[0].cpu()
+    labels_set, num_classes_set, req_c = FINCH(features_list, initial_rank=initial_rank, req_clust=None, distance='cosine', ensure_early_exit=True, verbose=True, cfg=cfg)
     labels = torch.from_numpy(labels_set[:, iters]).long()
     num_classes = num_classes_set[iters]
     centers = generate_cluster_features(torch.unique(labels), features)
@@ -334,12 +343,12 @@ def label_generator_FINCH_context_single(iters, features, initial_rank, all_inds
     return labels, centers, num_classes
 
 @torch.no_grad()
-def label_generator_FINCH_context_SpCL(cfg, features, initial_rank, cuda=True, indep_thres=None, all_inds=None, **kwargs):
+def label_generator_FINCH_context_SpCL(cfg, features_list, initial_rank, cuda=True, indep_thres=None, all_inds=None, **kwargs):
     iters = kwargs.get("iters", [0, 1, 2])
-    features = features.cpu()
-    labels_tight, centers_tight, num_classes_tight = label_generator_FINCH_context_single(iters[2], features, initial_rank, all_inds=all_inds)
-    labels_normal, centers_normal, num_classes = label_generator_FINCH_context_single(iters[1], features, initial_rank, all_inds=all_inds)
-    labels_loose, centers_loose, num_classes_loose = label_generator_FINCH_context_single(iters[0], features, initial_rank, all_inds=all_inds)
+    features = features_list[0].cpu()
+    labels_tight, centers_tight, num_classes_tight = label_generator_FINCH_context_single(cfg, iters[2], features_list, initial_rank, all_inds=all_inds)
+    labels_normal, centers_normal, num_classes = label_generator_FINCH_context_single(cfg, iters[1], features_list, initial_rank, all_inds=all_inds)
+    labels_loose, centers_loose, num_classes_loose = label_generator_FINCH_context_single(cfg, iters[0], features_list, initial_rank, all_inds=all_inds)
 
     # compute R_indep and R_comp
     N = labels_normal.size(0)
@@ -428,10 +437,13 @@ def label_generator_FINCH_context_SpCL_Plus(cfg, features, cuda=True, indep_thre
     split_num = split_num.tolist()
     
     instance_sim = features.mm(features.t())
+    bottom_features = torch.load("./saved_file/bottom_features.pth")
+    top_features = torch.load("./saved_file/top_features.pth")
     if cfg.PSEUDO_LABELS.part_feat.use_part_feat:
         print("-------------------------part based clustering---------------------------------")
-        bottom_features = torch.load("./saved_file/bottom_features.pth")
-        top_features = torch.load("./saved_file/top_features.pth")
+        # hybrid_feature = cfg.PSEUDO_LABELS.part_feat.global_weight * features + cfg.PSEUDO_LABELS.part_feat.part_weight * (top_features + bottom_features)
+        # hybrid_feature = F.normalize(hybrid_feature)
+        # instance_sim = hybrid_feature.mm(hybrid_feature.t())
         bottom_feat_sim = bottom_features.mm(bottom_features.t())
         top_feat_sim = top_features.mm(top_features.t())
         part_feat_sim = bottom_feat_sim + top_feat_sim
@@ -447,19 +459,24 @@ def label_generator_FINCH_context_SpCL_Plus(cfg, features, cuda=True, indep_thre
     elif cfg.PSEUDO_LABELS.context_method == "scene":
         scene_features = torch.load("./saved_file/scene_features.pth")
         scene_sim = scene_features.mm(scene_features.t())
-        # print("scene_sim", scene_sim[:50][:50])
 
     # scene_sim = img_sim
     # if cfg.PSEUDO_LABELS.context_clip:
     #     scene_sim = scene_sim * (scene_sim > cfg.PSEUDO_LABELS.threshold)
     
     hybrid_instance_sim, initial_rank = get_hybrid_sim(instance_sim, split_num, person_sim, img_sim, 0., cfg.PSEUDO_LABELS.lambda_scene)
+    # if cfg.PSEUDO_LABELS.part_feat.use_part_feat:
+    #     _, initial_rank_bottom = get_hybrid_sim(bottom_feat_sim, split_num, person_sim, img_sim, 0., cfg.PSEUDO_LABELS.lambda_scene)
+    #     _, initial_rank_top = get_hybrid_sim(top_feat_sim, split_num, person_sim, img_sim, 0., cfg.PSEUDO_LABELS.lambda_scene)
+    blabels = None
+    tlabels = None
     if cfg.PSEUDO_LABELS.SpCL:
-        labels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, features, initial_rank, cuda, indep_thres, all_inds, **kwargs)
+        labels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, [features, bottom_features, top_features], initial_rank, cuda, indep_thres, all_inds, **kwargs)
+        # if cfg.PSEUDO_LABELS.part_feat.use_part_feat:
+        #     blabels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, bottom_features, initial_rank_bottom, cuda, indep_thres, all_inds, **kwargs)
+        #     tlabels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, top_features, initial_rank_top, cuda, indep_thres, all_inds, **kwargs)
     else:
-        labels, centers, num_classes = label_generator_FINCH_context_single(0, features, initial_rank, all_inds=all_inds)
-    # if cfg.PSEUDO_LABELS.use_post_process:
-    #     labels, centers, num_classes = post_process(cfg, labels, hybrid_instance_sim, features)
+        labels, centers, num_classes = label_generator_FINCH_context_single(cfg, 0, [features, bottom_features, top_features], initial_rank, all_inds=all_inds)
 
     for i in range(cfg.PSEUDO_LABELS.iters):
         print("clustering iteration: {}".format(i + 1))
@@ -475,14 +492,18 @@ def label_generator_FINCH_context_SpCL_Plus(cfg, features, cuda=True, indep_thre
                         person_sim[img_ids[i].item()][img_ids[j].item()] += instance_sim[tmp_id[i].item()][tmp_id[j].item()]
                         person_sim[img_ids[j].item()][img_ids[i].item()] += instance_sim[tmp_id[j].item()][tmp_id[i].item()]
         hybrid_instance_sim, initial_rank = get_hybrid_sim(instance_sim, split_num, person_sim, img_sim, cfg.PSEUDO_LABELS.lambda_person, cfg.PSEUDO_LABELS.lambda_scene)
+        # if cfg.PSEUDO_LABELS.part_feat.use_part_feat:
+        #     _, initial_rank_bottom = get_hybrid_sim(bottom_feat_sim, split_num, person_sim, img_sim, cfg.PSEUDO_LABELS.lambda_person, cfg.PSEUDO_LABELS.lambda_scene)
+        #     _, initial_rank_top = get_hybrid_sim(top_feat_sim, split_num, person_sim, img_sim, cfg.PSEUDO_LABELS.lambda_person, cfg.PSEUDO_LABELS.lambda_scene)
         if cfg.PSEUDO_LABELS.SpCL:
-            labels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, features, initial_rank, cuda, indep_thres, all_inds, **kwargs)
+            labels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, [features, bottom_features, top_features], initial_rank, cuda, indep_thres, all_inds, **kwargs)
+            # if cfg.PSEUDO_LABELS.part_feat.use_part_feat:
+            #     blabels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, bottom_features, initial_rank_bottom, cuda, indep_thres, all_inds, **kwargs)
+            #     tlabels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, top_features, initial_rank_top, cuda, indep_thres, all_inds, **kwargs)
         else:
-            labels, centers, num_classes = label_generator_FINCH_context_single(0, features, initial_rank, all_inds=all_inds)
-        # if cfg.PSEUDO_LABELS.use_post_process:
-        #     labels, centers, num_classes = post_process(cfg, labels, hybrid_instance_sim, features)
+            labels, centers, num_classes = label_generator_FINCH_context_single(cfg, 0, [features, bottom_features, top_features], initial_rank, all_inds=all_inds)
 
-    return labels, centers, num_classes, indep_thres
+    return labels, centers, num_classes, indep_thres, blabels, tlabels
 
 def generate_cluster_features(labels, features):
     centers = collections.defaultdict(list)

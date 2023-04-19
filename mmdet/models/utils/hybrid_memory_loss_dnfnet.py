@@ -186,6 +186,8 @@ class HybridMemoryMultiFocalPercentDnfnet(nn.Module):
         self.idx = torch.zeros(num_memory).long()
         self.register_buffer("features", torch.zeros(num_memory, num_features))
         self.register_buffer("labels", torch.zeros(num_memory).long())
+        # self.register_buffer("blabels", torch.zeros(num_memory).long())
+        # self.register_buffer("tlabels", torch.zeros(num_memory).long())
         self.register_buffer("mIoU", torch.zeros(num_memory, 3).float())
 
         if self.use_part_feat:
@@ -217,6 +219,14 @@ class HybridMemoryMultiFocalPercentDnfnet(nn.Module):
     def _update_label(self, labels):
         self.labels.data.copy_(labels.long().to(self.labels.device))
         self.mIoU.data.copy_(torch.ones(len(self.mIoU), 3).float()).to(self.mIoU.device)
+
+    @torch.no_grad()
+    def _update_blabel(self, blabels):
+        self.blabels.data.copy_(blabels.long().to(self.blabels.device))
+
+    @torch.no_grad()
+    def _update_tlabel(self, tlabels):
+        self.tlabels.data.copy_(tlabels.long().to(self.tlabels.device))
     
     @torch.no_grad()
     def get_cluster_ids(self, indexes):
@@ -285,20 +295,26 @@ class HybridMemoryMultiFocalPercentDnfnet(nn.Module):
         nums.index_add_(0, labels, torch.ones(self.num_memory, 1).float().cuda()) # [C], 求每一个簇样本个数
         mask = (nums > 0).float()
         
-        # 先求样本之间的相似度,再求和聚类中心的相似度
+        # # 先求样本之间的相似度,再求和聚类中心的相似度
         sim = torch.zeros(labels.max() + 1, B).float().cuda() # C * B, unique label num: C = labels.max() + 1表示标签的数量
         sim.index_add_(0, labels, cluster_inputs.t().contiguous())  # 每一列表示minibatch中instance与同一个簇中所有instance的相似度的和
         sim /= (mask * nums + (1 - mask)).clone().expand_as(sim) # average features in each cluster, C * B, 与聚类中心的相似度
         
+        # import ipdb;    ipdb.set_trace()
+        # weight = torch.load(os.path.join('saved_file', 'weight.pth')).cuda()    # [N]
+        # weighted_cluster_inputs = cluster_inputs * weight[None]
+        # sim = torch.zeros(labels.max() + 1, B).float().cuda() # C * B, unique label num: C = labels.max() + 1表示标签的数量
+        # sim.index_add_(0, labels, weighted_cluster_inputs.t().contiguous())  # 每一列表示minibatch中instance与同一个簇中所有instance的相似度的和
+        
         # 求方差
-        cluster_center = self.get_cluster_centroid()    # [C, 256]
-        average_std, average_std_exclude_outliers = self.get_gaussion_distribution(cluster_center)
+        # cluster_center = self.get_cluster_centroid()    # [C, 256]
+        # average_std, average_std_exclude_outliers = self.get_gaussion_distribution(cluster_center)
 
         mask = mask.expand_as(sim)
         masked_sim = self.masked_softmax_multi_focal(sim.t().contiguous(), mask.t().contiguous(), targets=targets, IoU=IoU, indexes=indexes, labels=labels) # sim: u * B, mask:u * B, masked_sim: B * u
         cluster_hard_loss = F.nll_loss(torch.log(masked_sim + 1e-6), targets, reduce=False)
-        cluster_hard_loss = cluster_hard_loss.mean()
-        return cluster_hard_loss, average_std.detach(), average_std_exclude_outliers.detach()
+        # cluster_hard_loss = cluster_hard_loss.mean()
+        return cluster_hard_loss#, average_std.detach(), average_std_exclude_outliers.detach()
 
     def get_gaussion_distribution(self, cluster_center):
         # 求簇的方差
@@ -400,7 +416,11 @@ class HybridMemoryMultiFocalPercentDnfnet(nn.Module):
 
         losses = {}
         targets = self.labels[indexes].clone()
-        labels = self.labels.clone() # [N, ]
+        # btargets = self.blabels[indexes].clone()
+        # ttargets = self.tlabels[indexes].clone()
+        labels = self.labels.clone()
+        # blabels = self.blabels.clone()
+        # tlabels = self.tlabels.clone()
             
         feats = F.normalize(feats, p=2, dim=1)        
         if self.use_part_feat:
@@ -417,7 +437,7 @@ class HybridMemoryMultiFocalPercentDnfnet(nn.Module):
 
         # losses["m2o_loss"] = self.get_m2o_loss(feats, targets, pos_is_gt_list)
         
-        label_mask = torch.load(os.path.join('saved_file', 'label_mask.pth')).cuda()
+        # label_mask = torch.load(os.path.join('saved_file', 'label_mask.pth')).cuda()
         
         # target_label_mask = label_mask[indexes]
         # inputs = inputs[target_label_mask]
@@ -425,30 +445,30 @@ class HybridMemoryMultiFocalPercentDnfnet(nn.Module):
         # top_inputs = top_inputs[target_label_mask]
         # targets = targets[target_label_mask]
 
-        inputs = inputs * label_mask[None, ]
-        bottom_inputs = bottom_inputs * label_mask[None, ]
-        top_inputs = top_inputs * label_mask[None, ]
+        # inputs = inputs * label_mask[None, ]
+        # bottom_inputs = bottom_inputs * label_mask[None, ]
+        # top_inputs = top_inputs * label_mask[None, ]
 
-        if self.use_max_IoU_bbox:
-            inputs, global_targets, IoU, global_indexes, feats = inputs[update_flag], targets[update_flag], \
-                            IoU[update_flag], indexes[update_flag], feats[update_flag]
-            if self.use_part_feat:
-                top_inputs, top_targets, top_IoU, top_indexes, top_feats = top_inputs[top_update_flag], targets[top_update_flag], \
-                                top_IoU[top_update_flag], indexes[top_update_flag], top_feats[top_update_flag]
-                bottom_inputs, bottom_targets, bottom_IoU, bottom_indexes, bottom_feats = bottom_inputs[bottom_update_flag], \
-                            targets[bottom_update_flag], bottom_IoU[bottom_update_flag], indexes[bottom_update_flag], bottom_feats[bottom_update_flag]
-        else:
-            global_targets, bottom_targets, top_targets = targets.clone(), targets.clone(), targets.clone()
-            global_indexes, bottom_indexes, top_indexes = indexes.clone(), indexes.clone(), indexes.clone()
+        # if self.use_max_IoU_bbox:
+        #     inputs, global_targets, IoU, global_indexes, feats = inputs[update_flag], targets[update_flag], \
+        #                     IoU[update_flag], indexes[update_flag], feats[update_flag]
+        #     if self.use_part_feat:
+        #         top_inputs, top_targets, top_IoU, top_indexes, top_feats = top_inputs[top_update_flag], targets[top_update_flag], \
+        #                         top_IoU[top_update_flag], indexes[top_update_flag], top_feats[top_update_flag]
+        #         bottom_inputs, bottom_targets, bottom_IoU, bottom_indexes, bottom_feats = bottom_inputs[bottom_update_flag], \
+        #                     targets[bottom_update_flag], bottom_IoU[bottom_update_flag], indexes[bottom_update_flag], bottom_feats[bottom_update_flag]
+        # else:
+        #     global_targets, bottom_targets, top_targets = targets.clone(), btargets.clone(), ttargets.clone()
+        #     global_indexes, bottom_indexes, top_indexes = indexes.clone(), indexes.clone(), indexes.clone()
         
         if self.use_cluster_hard_loss:
             losses["global_cluster_hard_loss"] = torch.tensor(0.)
             losses["part_cluster_hard_loss"] = torch.tensor(0.)
             if targets.shape[0] > 0:
-                losses["global_cluster_hard_loss"], losses["average_std"], losses["average_std_exclude_outliers"] = self.get_hard_cluster_loss(labels.clone(), inputs, global_targets, IoU, global_indexes, feats)
+                losses["global_cluster_hard_loss"] = self.get_hard_cluster_loss(labels.clone(), inputs, targets, IoU, indexes, feats)
                 if self.use_part_feat:
-                    bottom_cluster_hard_loss, _, _ = self.get_hard_cluster_loss(labels.clone(), bottom_inputs, bottom_targets, bottom_IoU, bottom_indexes, bottom_feats)
-                    top_cluster_hard_loss, _, _ = self.get_hard_cluster_loss(labels.clone(), top_inputs, top_targets, top_IoU, top_indexes, top_feats)
+                    bottom_cluster_hard_loss = self.get_hard_cluster_loss(labels.clone(), bottom_inputs, targets, bottom_IoU, indexes, bottom_feats)
+                    top_cluster_hard_loss = self.get_hard_cluster_loss(labels.clone(), top_inputs, targets, top_IoU, indexes, top_feats)
                     losses["part_cluster_hard_loss"] = bottom_cluster_hard_loss + top_cluster_hard_loss
                     # losses["part_iou_loss"] = self.get_iou_loss(bottom_feats, top_iou_target) + self.get_iou_loss(top_feats, bottom_iou_target)
         return losses
