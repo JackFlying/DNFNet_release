@@ -22,7 +22,7 @@ except Exception as e:
 
 ANN_THRESHOLD = 70000
 
-def clust_rank(mat, bottom_mat, top_mat, initial_rank=None, distance='cosine', cfg=None):  # cosine: 1 - cos
+def clust_rank(mat, bottom_mat, top_mat, initial_rank=None, distance='cosine', cfg=None, intra_context_mask=None):  # cosine: 1 - cos
     s = mat.shape[0]
     if initial_rank is not None:
         orig_dist = np.array([])
@@ -124,7 +124,7 @@ def req_numclust(c, data, req_clust, distance):
     return c_
 
 
-def FINCH(data_list, initial_rank=None, req_clust=None, distance='cosine', ensure_early_exit=True, verbose=True, cfg=None):
+def FINCH(data_list, initial_rank=None, req_clust=None, distance='cosine', ensure_early_exit=True, verbose=True, cfg=None, intra_context_mask=None):
     """ FINCH clustering algorithm.
     :param data: Input matrix with features in rows.
     :param initial_rank: Nx1 first integer neighbor indices (optional).
@@ -151,6 +151,7 @@ def FINCH(data_list, initial_rank=None, req_clust=None, distance='cosine', ensur
     data = np.array(data.cpu())
     bottom_data = np.array(bottom_data.cpu())
     top_data = np.array(top_data.cpu())
+    intra_context_mask = np.array(intra_context_mask.cpu())
     
     if initial_rank is not None:
         initial_rank = np.array(initial_rank.cpu())
@@ -160,7 +161,7 @@ def FINCH(data_list, initial_rank=None, req_clust=None, distance='cosine', ensur
     top_data = top_data.astype(np.float32)
 
     min_sim = None
-    adj, orig_dist = clust_rank(data, bottom_data, top_data, initial_rank, distance, cfg)
+    adj, orig_dist = clust_rank(data, bottom_data, top_data, initial_rank, distance, cfg, intra_context_mask)
     initial_rank = None
     group, num_clust = get_clust(adj, [], min_sim)
     c, mat, bmat, tmat = get_merge([], group, data, bottom_data, top_data) # 求聚类中心
@@ -206,14 +207,12 @@ def FINCH(data_list, initial_rank=None, req_clust=None, distance='cosine', ensur
 
     return c, num_clust, req_c
 
-
 def list_duplicates(seq):
     tally = collections.defaultdict(list)
     for i,item in enumerate(seq):
         tally[item].append(i)
     dups = [(key,locs) for key,locs in tally.items() if len(locs)>1]
     return dups
-
 
 @torch.no_grad()
 def process_label_with_context(labels, centers, features, inds, num_classes):
@@ -224,6 +223,7 @@ def process_label_with_context(labels, centers, features, inds, num_classes):
     assert N_p == labels.shape[0]
     assert N_p == inds.shape[0]
     unique_inds = set(inds.cpu().numpy())
+    print("num_classes_pre", num_classes)
     for uid in unique_inds: # image idx
         b = (inds == uid)
         tmp_id = b.nonzero()
@@ -240,9 +240,9 @@ def process_label_with_context(labels, centers, features, inds, num_classes):
                         labels[tmp_id[dup[1][i]]] = num_classes
                         centers = torch.cat((centers, features[tmp_id[dup[1][i]]]))
                         num_classes += 1
+    print("num_classes_after", num_classes)
     assert num_classes == centers.shape[0]
     return labels, centers, num_classes
-
 
 @torch.no_grad()
 def generate_cluster_features(labels, features):
@@ -317,7 +317,7 @@ def get_extend_sim_matrix(sim, split_num):
     img2img_sim_extend = torch.cat(img2img_sim_extend, dim=0)
     return img2img_sim_extend
 
-def get_hybrid_sim(inst_sim_matrix, split_num, person_sim, scene_sim, lambda_person, lambda_scene):
+def get_hybrid_sim(inst_sim_matrix, split_num, person_sim, scene_sim, lambda_person, lambda_scene, intra_context_mask):
     """
         将上下文相似度加到视觉相似度上面
         1. 将上下文相似度维度进行扩充满足视觉相似度
@@ -329,13 +329,14 @@ def get_hybrid_sim(inst_sim_matrix, split_num, person_sim, scene_sim, lambda_per
     # 将对角线位置填充为负无穷大,自身不能作为最近邻
     hybrid_sim_matrix_ = hybrid_sim_matrix.clone()
     hybrid_sim_matrix_ = hybrid_sim_matrix_.fill_diagonal_(-100.)
+    hybrid_sim_matrix_[intra_context_mask == False] = -100
     _, initial_rank = torch.max(hybrid_sim_matrix_, dim=-1)
     return hybrid_sim_matrix, initial_rank
 
 @torch.no_grad()
-def label_generator_FINCH_context_single(cfg, iters, features_list, initial_rank, all_inds=None):
+def label_generator_FINCH_context_single(cfg, iters, features_list, initial_rank, all_inds, intra_context_mask):
     features = features_list[0].cpu()
-    labels_set, num_classes_set, req_c = FINCH(features_list, initial_rank=initial_rank, req_clust=None, distance='cosine', ensure_early_exit=True, verbose=True, cfg=cfg)
+    labels_set, num_classes_set, req_c = FINCH(features_list, initial_rank=initial_rank, req_clust=None, distance='cosine', ensure_early_exit=True, verbose=True, cfg=cfg, intra_context_mask=intra_context_mask)
     labels = torch.from_numpy(labels_set[:, iters]).long()
     num_classes = num_classes_set[iters]
     centers = generate_cluster_features(torch.unique(labels), features)
@@ -343,12 +344,12 @@ def label_generator_FINCH_context_single(cfg, iters, features_list, initial_rank
     return labels, centers, num_classes
 
 @torch.no_grad()
-def label_generator_FINCH_context_SpCL(cfg, features_list, initial_rank, cuda=True, indep_thres=None, all_inds=None, **kwargs):
+def label_generator_FINCH_context_SpCL(cfg, features_list, initial_rank, cuda=True, indep_thres=None, all_inds=None, intra_context_mask=None, **kwargs):
     iters = kwargs.get("iters", [0, 1, 2])
     features = features_list[0].cpu()
-    labels_tight, centers_tight, num_classes_tight = label_generator_FINCH_context_single(cfg, iters[2], features_list, initial_rank, all_inds=all_inds)
-    labels_normal, centers_normal, num_classes = label_generator_FINCH_context_single(cfg, iters[1], features_list, initial_rank, all_inds=all_inds)
-    labels_loose, centers_loose, num_classes_loose = label_generator_FINCH_context_single(cfg, iters[0], features_list, initial_rank, all_inds=all_inds)
+    labels_tight, centers_tight, num_classes_tight = label_generator_FINCH_context_single(cfg, iters[2], features_list, initial_rank, all_inds, intra_context_mask)
+    labels_normal, centers_normal, num_classes = label_generator_FINCH_context_single(cfg, iters[1], features_list, initial_rank, all_inds, intra_context_mask)
+    labels_loose, centers_loose, num_classes_loose = label_generator_FINCH_context_single(cfg, iters[0], features_list, initial_rank, all_inds, intra_context_mask)
 
     # compute R_indep and R_comp
     N = labels_normal.size(0)
@@ -463,20 +464,20 @@ def label_generator_FINCH_context_SpCL_Plus(cfg, features, cuda=True, indep_thre
     # scene_sim = img_sim
     # if cfg.PSEUDO_LABELS.context_clip:
     #     scene_sim = scene_sim * (scene_sim > cfg.PSEUDO_LABELS.threshold)
-    
-    hybrid_instance_sim, initial_rank = get_hybrid_sim(instance_sim, split_num, person_sim, img_sim, 0., cfg.PSEUDO_LABELS.lambda_scene)
+    intra_context_mask = get_intra_context_mask(all_inds)
+    hybrid_instance_sim, initial_rank = get_hybrid_sim(instance_sim, split_num, person_sim, img_sim, 0., cfg.PSEUDO_LABELS.lambda_scene, intra_context_mask)
     # if cfg.PSEUDO_LABELS.part_feat.use_part_feat:
     #     _, initial_rank_bottom = get_hybrid_sim(bottom_feat_sim, split_num, person_sim, img_sim, 0., cfg.PSEUDO_LABELS.lambda_scene)
     #     _, initial_rank_top = get_hybrid_sim(top_feat_sim, split_num, person_sim, img_sim, 0., cfg.PSEUDO_LABELS.lambda_scene)
     blabels = None
     tlabels = None
     if cfg.PSEUDO_LABELS.SpCL:
-        labels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, [features, bottom_features, top_features], initial_rank, cuda, indep_thres, all_inds, **kwargs)
+        labels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, [features, bottom_features, top_features], initial_rank, cuda, indep_thres, all_inds, intra_context_mask, **kwargs)
         # if cfg.PSEUDO_LABELS.part_feat.use_part_feat:
         #     blabels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, bottom_features, initial_rank_bottom, cuda, indep_thres, all_inds, **kwargs)
         #     tlabels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, top_features, initial_rank_top, cuda, indep_thres, all_inds, **kwargs)
     else:
-        labels, centers, num_classes = label_generator_FINCH_context_single(cfg, 0, [features, bottom_features, top_features], initial_rank, all_inds=all_inds)
+        labels, centers, num_classes = label_generator_FINCH_context_single(cfg, 0, [features, bottom_features, top_features], initial_rank, all_inds, intra_context_mask)
 
     for i in range(cfg.PSEUDO_LABELS.iters):
         print("clustering iteration: {}".format(i + 1))
@@ -491,17 +492,17 @@ def label_generator_FINCH_context_SpCL_Plus(cfg, features, cuda=True, indep_thre
                     for j in range(0, i, 1):
                         person_sim[img_ids[i].item()][img_ids[j].item()] += instance_sim[tmp_id[i].item()][tmp_id[j].item()]
                         person_sim[img_ids[j].item()][img_ids[i].item()] += instance_sim[tmp_id[j].item()][tmp_id[i].item()]
-        hybrid_instance_sim, initial_rank = get_hybrid_sim(instance_sim, split_num, person_sim, img_sim, cfg.PSEUDO_LABELS.lambda_person, cfg.PSEUDO_LABELS.lambda_scene)
+        hybrid_instance_sim, initial_rank = get_hybrid_sim(instance_sim, split_num, person_sim, img_sim, cfg.PSEUDO_LABELS.lambda_person, cfg.PSEUDO_LABELS.lambda_scene, intra_context_mask)
         # if cfg.PSEUDO_LABELS.part_feat.use_part_feat:
         #     _, initial_rank_bottom = get_hybrid_sim(bottom_feat_sim, split_num, person_sim, img_sim, cfg.PSEUDO_LABELS.lambda_person, cfg.PSEUDO_LABELS.lambda_scene)
         #     _, initial_rank_top = get_hybrid_sim(top_feat_sim, split_num, person_sim, img_sim, cfg.PSEUDO_LABELS.lambda_person, cfg.PSEUDO_LABELS.lambda_scene)
         if cfg.PSEUDO_LABELS.SpCL:
-            labels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, [features, bottom_features, top_features], initial_rank, cuda, indep_thres, all_inds, **kwargs)
+            labels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, [features, bottom_features, top_features], initial_rank, cuda, indep_thres, all_inds, intra_context_mask, **kwargs)
             # if cfg.PSEUDO_LABELS.part_feat.use_part_feat:
             #     blabels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, bottom_features, initial_rank_bottom, cuda, indep_thres, all_inds, **kwargs)
             #     tlabels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, top_features, initial_rank_top, cuda, indep_thres, all_inds, **kwargs)
         else:
-            labels, centers, num_classes = label_generator_FINCH_context_single(cfg, 0, [features, bottom_features, top_features], initial_rank, all_inds=all_inds)
+            labels, centers, num_classes = label_generator_FINCH_context_single(cfg, 0, [features, bottom_features, top_features], initial_rank, all_inds, intra_context_mask)
 
     return labels, centers, num_classes, indep_thres, blabels, tlabels
 
@@ -516,3 +517,17 @@ def generate_cluster_features(labels, features):
     ]
     centers = torch.stack(centers, dim=0)
     return centers
+
+@torch.no_grad()
+def get_intra_context_mask(inds):
+    # 获取mask矩阵，将属于同一张图片的行人的相似度设置为无穷大
+    N = inds.shape[0]
+    intra_context_mask = torch.ones((N, N)).bool()
+    unique_inds = set(inds.cpu().numpy())
+    for uid in unique_inds: # image idx
+        b = (inds == uid)
+        tmp_id = b.nonzero().squeeze(-1).tolist()
+        for i in range(len(tmp_id)):
+            for j in range(0, i, 1):
+                intra_context_mask[tmp_id[i]][tmp_id[j]] = intra_context_mask[tmp_id[j]][tmp_id[i]] = False
+    return intra_context_mask

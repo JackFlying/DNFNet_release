@@ -163,7 +163,7 @@ val_pipeline = [
         ])
 ]
 data = dict(
-    samples_per_gpu=4,
+    samples_per_gpu=5,
     workers_per_gpu=8,
     train=dict(pipeline=train_pipeline, query_test_pipeline=None),
     train_cluster=dict(pipeline=val_pipeline, query_test_pipeline=None),
