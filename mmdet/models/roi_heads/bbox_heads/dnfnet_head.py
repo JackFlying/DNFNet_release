@@ -116,8 +116,10 @@ class DNFNetHead(nn.Module):
         self.use_bn_affine = use_bn_affine
         self.seperate_norm = seperate_norm
         in_channels = self.in_channels
-        self.id_counts = []
-    
+        # self.use_dropout = True
+        # self.dropout = nn.Dropout(p=0.3)
+        # self.MC_times = 10
+        
         if self.with_avg_pool:
             self.avg_pool = nn.AvgPool2d(self.roi_feat_size)
         else:
@@ -332,6 +334,18 @@ class DNFNetHead(nn.Module):
             id_labels = labels[:, 1]
         
         id_feat1, id_feat2 = self.id_feature(x), self.id_feature1(x1)
+        # id_pred = []
+        # if self.use_dropout:
+        #     if self.training == True:
+        #         # self.dropout.train()
+        #         for i in range(self.MC_times):
+        #             id_feat1, id_feat2 = self.dropout(id_feat1), self.dropout(id_feat2)
+        #             id_pred_ = F.normalize(torch.cat((id_feat1, id_feat2), axis=1))
+        #             id_pred.append(id_pred_)
+        #         id_pred = torch.stack(id_pred, dim=1)
+        #     else:
+        # id_feat1, id_feat2 = self.dropout(id_feat1), self.dropout(id_feat2)
+        id_pred = F.normalize(torch.cat((id_feat1, id_feat2), axis=1))
 
         if self.norm_type in ['protonorm', 'batchnorm']:
             if self.training:
@@ -341,7 +355,7 @@ class DNFNetHead(nn.Module):
             else:
                 id_pred = torch.cat((id_feat1, id_feat2), axis=1)
                 id_pred = self.normalize(id_pred)
-        id_pred = F.normalize(torch.cat((id_feat1, id_feat2), axis=1))
+        
 
         scene_embed, query_embed = None, None
         if self.use_gfn:
@@ -356,6 +370,8 @@ class DNFNetHead(nn.Module):
                 part_feat1 = part_feat1.view(part_feat1.size(0), -1)
                 part_feat = part_feat.view(part_feat.size(0), -1)
                 id_part_feat1, id_part_feat2 = self.id_part_feature[i](part_feat), self.id_part_feature1[i](part_feat1)
+                if self.use_dropout:
+                    id_part_feat1, id_part_feat2 = self.dropout(id_part_feat1), self.dropout(id_part_feat2)
                 if self.norm_type in ['protonorm', 'batchnorm']:
                     if self.training:
                         id_feat = torch.cat((id_part_feat1, id_part_feat2), axis=1)
@@ -577,6 +593,7 @@ class DNFNetHead(nn.Module):
                 losses['loss_bbox'] = bbox_pred.sum() * 0
                 IoU = torch.zeros(0).cuda()
 
+        # import ipdb;    ipdb.set_trace()
         rid_pred = id_pred[id_labels!=-2]
         rid_labels = id_labels[id_labels!=-2]
 

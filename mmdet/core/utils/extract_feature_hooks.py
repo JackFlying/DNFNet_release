@@ -44,7 +44,7 @@ class ExtractFeatureHook(Hook):
         self.uncertainty_estimation = False
         self.use_part_feats = cfg.USE_PART_FEAT
         self.use_gfn = cfg.USE_GFN
-        self.use_feature_std = not cfg.USE_PART_FEAT
+        self.use_feature_std = cfg.USE_STD
         
     
     def before_run(self, runner):

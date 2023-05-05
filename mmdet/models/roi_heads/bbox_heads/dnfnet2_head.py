@@ -555,7 +555,7 @@ class DNFNet2Head(nn.Module):
         # rid_pred_log_var = id_pred_log_var[id_labels!=-2]
         rpart_feats = part_feats[id_labels!=-2] if part_feats is not None else None
         
-        memory_loss = self.loss_reid(rid_pred, rid_labels, IoU, rpart_feats, top_IoU, bottom_IoU, pos_is_gt_list, None)
+        memory_loss = self.loss_reid(rid_pred, rid_labels, IoU, rpart_feats, top_IoU, bottom_IoU, pos_is_gt_list)
         memory_loss['global_cluster_hard_loss'] *= self.global_weight
         memory_loss["part_cluster_hard_loss"] *= (1 - self.global_weight)
         losses.update(memory_loss)

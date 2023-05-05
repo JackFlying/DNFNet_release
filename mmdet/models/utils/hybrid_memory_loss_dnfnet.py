@@ -138,6 +138,9 @@ class HM(autograd.Function):
                 ctx.features[y] = (1 - iou) * ctx.features[y] + iou * x
             elif ctx.update_method == "max_iou":
                 if uf: ctx.features[y] = x
+            elif ctx.update_method == "max_iou_momentum":
+                if uf: ctx.features[y] = ctx.momentum * ctx.features[y] + (1.0 - ctx.momentum) * x
+            
             ctx.features[y] /= ctx.features[y].norm()
 
         return grad_inputs, None, None, None, None, None, None, None

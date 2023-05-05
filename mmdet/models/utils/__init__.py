@@ -9,7 +9,8 @@ from .unified_loss import UnifiedLoss
 from .unified_loss_memory_loss import UnifiedLossMemoryMultiFocalPercent
 from .memory_quaduplet2_loss import MemoryQuaduplet2Loss
 from .hybrid_memory_loss_cluster import HybridMemoryMultiFocalPercentCluster
+from .hybrid_memory_loss_cluster2 import HybridMemoryMultiFocalPercentCluster2
 
 __all__ = ['ResLayer', 'gaussian_radius', 'gen_gaussian_target', 'UnifiedLossMemoryMultiFocalPercent', \
     'Quaduplet2Loss', 'HybridMemoryMultiFocalPercent', 'ClusterMemory', 'CircleLoss', 'UnifiedLoss', 'HybridMemoryMultiFocalPercentv2',\
-    'MemoryQuaduplet2Loss', 'HybridMemoryMultiFocalPercentCluster', 'HybridMemoryMultiFocalPercentDnfnet']
+    'MemoryQuaduplet2Loss', 'HybridMemoryMultiFocalPercentCluster', 'HybridMemoryMultiFocalPercentDnfnet', 'HybridMemoryMultiFocalPercentCluster2']

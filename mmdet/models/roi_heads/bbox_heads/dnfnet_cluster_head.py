@@ -10,7 +10,7 @@ from mmdet.core import (auto_fp16, build_bbox_coder, force_fp32, multi_apply,
                         multiclass_nms, multiclass_nms_aug)
 from mmdet.models.builder import HEADS, build_loss
 from mmdet.models.losses import accuracy
-from mmdet.models.utils import HybridMemoryMultiFocalPercent, Quaduplet2Loss, MemoryQuaduplet2Loss, HybridMemoryMultiFocalPercentCluster, HybridMemoryMultiFocalPercentDnfnet
+from mmdet.models.utils import HybridMemoryMultiFocalPercent, Quaduplet2Loss, MemoryQuaduplet2Loss, HybridMemoryMultiFocalPercentCluster, HybridMemoryMultiFocalPercentDnfnet, HybridMemoryMultiFocalPercentCluster2
 from .gfn import GalleryFilterNetwork
 from mmdet.models.utils.ProtoNorm import PrototypeNorm1d, register_targets_for_pn, convert_bn_to_pn
 import os
@@ -94,7 +94,7 @@ class DNFNet2ClusterHead(nn.Module):
         self.bbox_coder = build_bbox_coder(bbox_coder)
         self.loss_cls = build_loss(loss_cls)
         self.loss_bbox = build_loss(loss_bbox)
-        self.loss_reid = HybridMemoryMultiFocalPercentCluster(num_features, id_num, temp=temperature, momentum=momentum, testing=testing, cluster_top_percent=cluster_top_percent, \
+        self.loss_reid = HybridMemoryMultiFocalPercentCluster2(num_features, id_num, temp=temperature, momentum=momentum, testing=testing, cluster_top_percent=cluster_top_percent, \
                                                         instance_top_percent=instance_top_percent, use_cluster_hard_loss=use_cluster_hard_loss,
                                                         use_instance_hard_loss=use_instance_hard_loss, use_hybrid_loss=use_hybrid_loss, use_IoU_loss=use_IoU_loss, \
                                                         use_IoU_memory=use_IoU_memory, IoU_loss_clip=IoU_loss_clip, IoU_memory_clip=IoU_memory_clip, \
@@ -132,6 +132,10 @@ class DNFNet2ClusterHead(nn.Module):
         self.feat_channels = 512
         self.stacked_convs = 2
         reg_class_agnostic = False
+
+        self.use_dropout = True
+        self.dropout = nn.Dropout(p=0.3)
+        self.MC_times = 5
         
         if self.with_reg:
             out_dim_reg = 4 if reg_class_agnostic else 4 * num_classes
@@ -174,10 +178,17 @@ class DNFNet2ClusterHead(nn.Module):
             
         self.feature_h = 14
         self.feature_w = 6
+        # import ipdb;    ipdb.set_trace()
         self.fc_reid = nn.Sequential(
+                            # nn.Dropout(p=0.3),
+                            # nn.ReLU(),
                             nn.Linear(in_channels * self.feature_h * self.feature_w, 256),
-                            # nn.BatchNorm1d(num_features=256, affine=False)
+                            nn.Dropout(p=0.3),
+                            nn.ReLU(),
+                            nn.Linear(256, 256),
+                            # nn.BatchNorm1d(num_features=256, affine=False)   
                         )
+        
         self.fc_reid_std = nn.Sequential(
                             nn.Linear(in_channels * self.feature_h * self.feature_w, 256),
                             # nn.BatchNorm1d(num_features=256, affine=False)
@@ -292,11 +303,25 @@ class DNFNet2ClusterHead(nn.Module):
         bbox_pred = self.fc_reg(reg_feat)   # [N, 4]
         
         x_reid = x
-        id_pred = self.fc_reid(x_reid.view(x_reid.size(0), -1))
+        # id_pred = self.fc_reid(x_reid.view(x_reid.size(0), -1))
         id_pred_log_var = self.fc_reid_std(x_reid.view(x_reid.size(0), -1)) # 生成的是对角阵,正常应该是[256, 256],现在是256,就是取对角线
         
         if self.training:
-            id_labels = labels[:, 1]            
+            id_labels = labels[:, 1]
+
+        if self.use_dropout:
+            if self.training == True:
+                # self.dropout.train()
+                id_pred = []
+                for i in range(self.MC_times):
+                    id_pred_ = self.fc_reid(x_reid.view(x_reid.size(0), -1))
+                    id_pred_ = F.normalize(id_pred_)
+                    id_pred.append(id_pred_)
+                id_pred = torch.stack(id_pred, dim=1)
+            else:
+                id_pred = self.fc_reid(x_reid.view(x_reid.size(0), -1))
+                id_pred = F.normalize(id_pred)
+
 
         if self.norm_type in ['protonorm'] and self.training:
             IoU, top_IoU, bottom_IoU = self.get_iou(bbox_pred, rois, labels, bbox_targets[2])
@@ -567,8 +592,12 @@ class DNFNet2ClusterHead(nn.Module):
             # batch_features = self.loss_reid.get_features(id_labels[id_labels != -2])
             # id_pred = torch.cat([id_pred, batch_features], dim=0)
             # new_id_labels = torch.cat([new_id_labels, id_labels[id_labels != -2]], dim=0)
-            losses['global_triplet_loss'] = self.loss_triplet(id_pred, new_id_labels, id_labels, IoU) * self.triplet_weight
-            
+            losses['global_triplet_loss'] = []
+            for i in range(id_pred.shape[1]):
+                losses['global_triplet_loss'].append(self.loss_triplet(id_pred[:, i, :], new_id_labels, id_labels, IoU))
+            losses["global_triplet_loss"] = torch.mean(torch.stack(losses["global_triplet_loss"]))
+            losses["global_triplet_loss"] = losses["global_triplet_loss"] * self.triplet_weight
+ 
             # all_features = self.loss_reid.get_all_features()
             # all_labels = self.loss_reid.get_all_cluster_ids()
             # losses['global_triplet_loss'] = self.loss_triplet(id_pred, new_id_labels, id_labels, IoU, all_features, all_labels) * self.triplet_weight

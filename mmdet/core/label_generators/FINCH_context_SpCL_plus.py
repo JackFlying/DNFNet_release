@@ -211,7 +211,7 @@ def list_duplicates(seq):
     tally = collections.defaultdict(list)
     for i,item in enumerate(seq):
         tally[item].append(i)
-    dups = [(key,locs) for key,locs in tally.items() if len(locs)>1]
+    dups = [(key,locs) for key,locs in tally.items() if len(locs)>1]    # key表示label,locs表示对应的index
     return dups
 
 @torch.no_grad()
@@ -438,13 +438,15 @@ def label_generator_FINCH_context_SpCL_Plus(cfg, features, cuda=True, indep_thre
     split_num = split_num.tolist()
     
     instance_sim = features.mm(features.t())
-    bottom_features = torch.load("./saved_file/bottom_features.pth")
-    top_features = torch.load("./saved_file/top_features.pth")
+    bottom_features = features
+    top_features = features
     if cfg.PSEUDO_LABELS.part_feat.use_part_feat:
         print("-------------------------part based clustering---------------------------------")
         # hybrid_feature = cfg.PSEUDO_LABELS.part_feat.global_weight * features + cfg.PSEUDO_LABELS.part_feat.part_weight * (top_features + bottom_features)
         # hybrid_feature = F.normalize(hybrid_feature)
         # instance_sim = hybrid_feature.mm(hybrid_feature.t())
+        bottom_features = torch.load("./saved_file/bottom_features.pth")
+        top_features = torch.load("./saved_file/top_features.pth")
         bottom_feat_sim = bottom_features.mm(bottom_features.t())
         top_feat_sim = top_features.mm(top_features.t())
         part_feat_sim = bottom_feat_sim + top_feat_sim

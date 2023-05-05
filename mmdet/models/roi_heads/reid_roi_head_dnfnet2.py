@@ -357,36 +357,52 @@ class ReidRoIHeadDNFNet2(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
         det_bboxes = []
         det_labels = []
         # import ipdb;    ipdb.set_trace()
-        if id_pred_log_var is not None and part_id_pred is None:
-            for i in range(len(proposals)):
-                det_bbox, det_label = self.bbox_head.get_bboxes(
-                    rois[i],
-                    cls_score[i],
-                    bbox_pred[i],
-                    id_pred[i],
-                    # RoI_Align_feat[i].view(RoI_Align_feat[i].shape[0], -1),  # [2048, 7, 7]
-                    id_pred_log_var[i],
-                    img_shapes[i],
-                    scale_factors[i],
-                    rescale=rescale,
-                    cfg=rcnn_test_cfg)
+
+        for i in range(len(proposals)):
+            det_bbox, det_label = self.bbox_head.get_bboxes(
+                rois[i],
+                cls_score[i],
+                bbox_pred[i],
+                id_pred[i],
+                # RoI_Align_feat[i].view(RoI_Align_feat[i].shape[0], -1),  # [2048, 7, 7]
+                part_id_pred[i] if part_id_pred is not None else None,
+                img_shapes[i],
+                scale_factors[i],
+                rescale=rescale,
+                cfg=rcnn_test_cfg)
             det_bboxes.append(det_bbox)
             det_labels.append(det_label)
-        elif id_pred_log_var is None and part_id_pred is not None:
-            for i in range(len(proposals)):
-                det_bbox, det_label = self.bbox_head.get_bboxes(
-                    rois[i],
-                    cls_score[i],
-                    bbox_pred[i],
-                    id_pred[i],
-                    # RoI_Align_feat[i].view(RoI_Align_feat[i].shape[0], -1),  # [2048, 7, 7]
-                    part_id_pred[i] if part_id_pred is not None else None,
-                    img_shapes[i],
-                    scale_factors[i],
-                    rescale=rescale,
-                    cfg=rcnn_test_cfg)
-                det_bboxes.append(det_bbox)
-                det_labels.append(det_label)
+
+        # if id_pred_log_var is not None and part_id_pred is None:
+        #     for i in range(len(proposals)):
+        #         det_bbox, det_label = self.bbox_head.get_bboxes(
+        #             rois[i],
+        #             cls_score[i],
+        #             bbox_pred[i],
+        #             id_pred[i],
+        #             # RoI_Align_feat[i].view(RoI_Align_feat[i].shape[0], -1),  # [2048, 7, 7]
+        #             id_pred_log_var[i],
+        #             img_shapes[i],
+        #             scale_factors[i],
+        #             rescale=rescale,
+        #             cfg=rcnn_test_cfg)
+        #     det_bboxes.append(det_bbox)
+        #     det_labels.append(det_label)
+        # elif id_pred_log_var is None and part_id_pred is not None:
+        #     for i in range(len(proposals)):
+        #         det_bbox, det_label = self.bbox_head.get_bboxes(
+        #             rois[i],
+        #             cls_score[i],
+        #             bbox_pred[i],
+        #             id_pred[i],
+        #             # RoI_Align_feat[i].view(RoI_Align_feat[i].shape[0], -1),  # [2048, 7, 7]
+        #             part_id_pred[i] if part_id_pred is not None else None,
+        #             img_shapes[i],
+        #             scale_factors[i],
+        #             rescale=rescale,
+        #             cfg=rcnn_test_cfg)
+        #         det_bboxes.append(det_bbox)
+        #         det_labels.append(det_label)
             
         return det_bboxes, det_labels
 
