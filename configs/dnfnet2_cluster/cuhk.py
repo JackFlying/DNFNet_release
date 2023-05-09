@@ -1,16 +1,15 @@
 _base_ = [
     '../_base_/models/faster_rcnn_r50_caffe_c4_reid_norm_unsu.py',
-    '../_base_/datasets/coco_reid_unsup_prw.py',
+    '../_base_/datasets/coco_reid_unsup.py',
     '../_base_/schedules/schedule_1x_reid_norm_base.py', '../_base_/default_runtime.py'
 ]
 TEST = False
-USE_PART_FEAT = False
-GLOBAL_WEIGHT = 0.9
+USE_PART_FEAT = True
+GLOBAL_WEIGHT = 0.8
 CO_LEARNING = False
 UNCERTAINTY = False
 HARD_MINING = False
 USE_GFN = False
-USE_STD = False
 model = dict(
     backbone=dict(
         type='ResNet',
@@ -30,7 +29,7 @@ model = dict(
         use_dconv=True,
         kernel1=True),
     roi_head=dict(
-        type='ReidRoIHeadDNFNet2',
+        type='ReidRoIHeadDNFNet2Cluster',
         use_gfn=USE_GFN,
         use_RoI_Align_feat=False,
         use_part_feat=USE_PART_FEAT,
@@ -46,8 +45,8 @@ model = dict(
         bbox_head=dict(
             in_channels=1024,
             testing=TEST,
-            type='DNFNet2Head',
-            id_num=18048,
+            type='DNFNet2ClusterHead',
+            id_num=55272,
             rcnn_bbox_bn=True,
             cluster_top_percent=0.6,
             instance_top_percent=1.0,
@@ -56,17 +55,17 @@ model = dict(
             use_instance_hard_loss=False,
             use_IoU_loss=False,
             use_IoU_memory=False,
-            use_uncertainty_loss=False,
-            use_hard_mining=False,
+            use_uncertainty_loss=UNCERTAINTY,
+            use_hard_mining=HARD_MINING,
             norm_type='l2norm',    # ['l2norm', 'protonorm', 'batchnorm']
             seperate_norm=False,
             use_bn_affine=False,
-            update_method='max_iou',    # ['momentum', 'iou', 'max_iou', 'max_iou_momentum]
+            update_method='max_iou',    # ['momentum', 'iou', 'max_iou']
             co_learning=CO_LEARNING,
             use_max_IoU_bbox=False,
             IoU_loss_clip=[0.7, 1.0],
             IoU_memory_clip=[0.05, 0.9],
-            IoU_momentum=0.2,
+            IoU_momentum=0.1,
             momentum=0.2,
             use_part_feat=USE_PART_FEAT,
             global_weight= GLOBAL_WEIGHT if USE_PART_FEAT else 1,
@@ -90,7 +89,7 @@ model = dict(
                 gfn_num_sample=(1, 1),
                 emb_dim=2048,
             )
-        )
+            )
     )
 )
 # use caffe img_norm
@@ -185,7 +184,7 @@ lr_config = dict(
     warmup_iters=2242,
     warmup_ratio=1.0 / 200,
     step=[16, 22])
-total_epochs = 30
+total_epochs = 26
 
 SPCL=True
 PSEUDO_LABELS = dict(
@@ -193,8 +192,8 @@ PSEUDO_LABELS = dict(
     use_outliers=True,
     norm_feat=True,
     norm_center=True,
-    SpCL=True,
-    cluster='FINCH_context_SpCL_Plus',   # dbscan_context, FINCH_context, FINCH_context_SpCL, FINCH_context_SpCL_Plus
+    SpCL=False,
+    cluster='FINCH_context_SpCL_Plus',
     eps=[0.68, 0.7, 0.72],
     min_samples=4, # for dbscan
     dist_metric='jaccard',
@@ -202,10 +201,10 @@ PSEUDO_LABELS = dict(
     k2=6, # for jaccard distance
     search_type=0, # 0,1,2 for GPU, 3 for CPU (work for faiss)
     cluster_num=None,
-    iters=1,    # 1
-    lambda_scene=0,   # 调成0,即zero初始化
+    iters=2,
+    lambda_scene=0,    # default: 0.3
     lambda_person=0.1,
-    context_method='zero',
+    context_method='zero',    # sum, max, zero
     threshold=0.5,
     use_post_process=False,
     filter_threshold=0.2,
@@ -219,13 +218,12 @@ PSEUDO_LABELS = dict(
     hard_mining=dict(use_hard_mining=HARD_MINING,
                     uncertainty_threshold=0.5,
                     label_refine_iters=0,
-                    refine_global_weight=0.5
-                    ),
+                    refine_global_weight=0.5),
     K=10,
 )
 # fp16 = dict(loss_scale=512.)
 workflow = [('train', 1)]
-evaluation = dict(start=16, interval=2, metric='bbox')
+evaluation = dict(start=30, interval=30, metric='bbox')
 testing = TEST
 save_features = True
 restart = False

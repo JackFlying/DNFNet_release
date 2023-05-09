@@ -5,7 +5,7 @@ from .double_bbox_head import DoubleConvFCBBoxHead
 from .sabl_head import SABLHead
 from .dnfnet_head import DNFNetHead
 from .dnfnet2_head import DNFNet2Head
-from .dnfnet_cluster_head import DNFNet2ClusterHead
+from .dnfnet2_cluster_head import DNFNet2ClusterHead
 from .hhcl_head import HHCLHead
 from .colearning_head import CoLearningHead
 from .dicl_head import DICLHead

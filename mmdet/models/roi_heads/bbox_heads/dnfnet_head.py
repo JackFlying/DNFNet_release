@@ -10,7 +10,7 @@ from mmdet.core import (auto_fp16, build_bbox_coder, force_fp32, multi_apply,
                         multiclass_nms, multiclass_nms_aug)
 from mmdet.models.builder import HEADS, build_loss
 from mmdet.models.losses import accuracy
-from mmdet.models.utils import HybridMemoryMultiFocalPercentDnfnet, Quaduplet2Loss, HybridMemoryMultiFocalPercentCluster
+from mmdet.models.utils import HybridMemoryMultiFocalPercentDnfnet, Quaduplet2Loss
 from .gfn import GalleryFilterNetwork
 from mmdet.models.utils.ProtoNorm import PrototypeNorm1d, register_targets_for_pn, convert_bn_to_pn
 import os
@@ -116,9 +116,6 @@ class DNFNetHead(nn.Module):
         self.use_bn_affine = use_bn_affine
         self.seperate_norm = seperate_norm
         in_channels = self.in_channels
-        # self.use_dropout = True
-        # self.dropout = nn.Dropout(p=0.3)
-        # self.MC_times = 10
         
         if self.with_avg_pool:
             self.avg_pool = nn.AvgPool2d(self.roi_feat_size)

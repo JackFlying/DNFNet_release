@@ -10,7 +10,7 @@ CO_LEARNING = False
 UNCERTAINTY = False
 HARD_MINING = False
 USE_GFN = False
-USE_STD = False
+USE_STD = True
 model = dict(
     backbone=dict(
         type='ResNet',
@@ -30,7 +30,7 @@ model = dict(
         use_dconv=True,
         kernel1=True),
     roi_head=dict(
-        type='ReidRoIHeadDNFNet2',
+        type='ReidRoIHeadDNFNet2Cluster',
         use_gfn=USE_GFN,
         use_RoI_Align_feat=False,
         use_part_feat=USE_PART_FEAT,
@@ -46,7 +46,7 @@ model = dict(
         bbox_head=dict(
             in_channels=1024,
             testing=TEST,
-            type='DNFNet2Head',
+            type='DNFNet2ClusterHead',
             id_num=18048,
             rcnn_bbox_bn=True,
             cluster_top_percent=0.6,
@@ -61,7 +61,7 @@ model = dict(
             norm_type='l2norm',    # ['l2norm', 'protonorm', 'batchnorm']
             seperate_norm=False,
             use_bn_affine=False,
-            update_method='max_iou',    # ['momentum', 'iou', 'max_iou', 'max_iou_momentum]
+            update_method='max_iou_momentum',    # ['momentum', 'iou', 'max_iou', 'max_iou_momentum]
             co_learning=CO_LEARNING,
             use_max_IoU_bbox=False,
             IoU_loss_clip=[0.7, 1.0],
@@ -225,7 +225,7 @@ PSEUDO_LABELS = dict(
 )
 # fp16 = dict(loss_scale=512.)
 workflow = [('train', 1)]
-evaluation = dict(start=16, interval=2, metric='bbox')
+evaluation = dict(start=4, interval=2, metric='bbox')
 testing = TEST
 save_features = True
 restart = False

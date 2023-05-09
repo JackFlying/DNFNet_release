@@ -10,7 +10,7 @@ from mmdet.core import (auto_fp16, build_bbox_coder, force_fp32, multi_apply,
                         multiclass_nms, multiclass_nms_aug)
 from mmdet.models.builder import HEADS, build_loss
 from mmdet.models.losses import accuracy
-from mmdet.models.utils import HybridMemoryMultiFocalPercent, Quaduplet2Loss, MemoryQuaduplet2Loss, HybridMemoryMultiFocalPercentCluster, HybridMemoryMultiFocalPercentDnfnet, HybridMemoryMultiFocalPercentCluster2
+from mmdet.models.utils import Quaduplet2Loss, MemoryQuaduplet2Loss, HybridMemoryMultiFocalPercentUncertainty, HybridMemoryMultiFocalPercentMCDropout
 from .gfn import GalleryFilterNetwork
 from mmdet.models.utils.ProtoNorm import PrototypeNorm1d, register_targets_for_pn, convert_bn_to_pn
 import os
@@ -94,7 +94,7 @@ class DNFNet2ClusterHead(nn.Module):
         self.bbox_coder = build_bbox_coder(bbox_coder)
         self.loss_cls = build_loss(loss_cls)
         self.loss_bbox = build_loss(loss_bbox)
-        self.loss_reid = HybridMemoryMultiFocalPercentCluster2(num_features, id_num, temp=temperature, momentum=momentum, testing=testing, cluster_top_percent=cluster_top_percent, \
+        self.loss_reid = HybridMemoryMultiFocalPercentMCDropout(num_features, id_num, temp=temperature, momentum=momentum, testing=testing, cluster_top_percent=cluster_top_percent, \
                                                         instance_top_percent=instance_top_percent, use_cluster_hard_loss=use_cluster_hard_loss,
                                                         use_instance_hard_loss=use_instance_hard_loss, use_hybrid_loss=use_hybrid_loss, use_IoU_loss=use_IoU_loss, \
                                                         use_IoU_memory=use_IoU_memory, IoU_loss_clip=IoU_loss_clip, IoU_memory_clip=IoU_memory_clip, \
@@ -135,7 +135,7 @@ class DNFNet2ClusterHead(nn.Module):
 
         self.use_dropout = True
         self.dropout = nn.Dropout(p=0.3)
-        self.MC_times = 5
+        self.MC_times = 3
         
         if self.with_reg:
             out_dim_reg = 4 if reg_class_agnostic else 4 * num_classes
@@ -175,10 +175,9 @@ class DNFNet2ClusterHead(nn.Module):
                         act_cfg=dict(type='ReLU'), #None,#
                         bias='auto'),)
             self.fc_cls = nn.Linear(self.feat_channels, num_classes + 1)
-            
+
         self.feature_h = 14
         self.feature_w = 6
-        # import ipdb;    ipdb.set_trace()
         self.fc_reid = nn.Sequential(
                             # nn.Dropout(p=0.3),
                             # nn.ReLU(),
@@ -311,7 +310,6 @@ class DNFNet2ClusterHead(nn.Module):
 
         if self.use_dropout:
             if self.training == True:
-                # self.dropout.train()
                 id_pred = []
                 for i in range(self.MC_times):
                     id_pred_ = self.fc_reid(x_reid.view(x_reid.size(0), -1))

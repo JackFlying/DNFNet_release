@@ -45,6 +45,8 @@ def get_mean_conv(input_vec):
     # import ipdb;    ipdb.set_trace()
     # euc_dist = euclidean_dist(input_vec, mean[None])
     # cos_dist = cosine_dist(input_vec, mean[None])
+    
+    # 如果要用高斯混合模型，系数可以预测获得
     return mean[None], cov_matrix[None]
 
 class HM_part(autograd.Function):
@@ -139,7 +141,7 @@ class HM_part(autograd.Function):
         IoU = torch.clamp(IoU, min=IoU_memory_clip[0], max=IoU_memory_clip[1])
         bottom_IoU = torch.clamp(bottom_IoU, min=IoU_memory_clip[0], max=IoU_memory_clip[1])
         top_IoU = torch.clamp(top_IoU, min=IoU_memory_clip[0], max=IoU_memory_clip[1])
-
+        # import ipdb;    ipdb.set_trace()
         for x, y, b, t, iou, biou, tiou, uf, tuf, buf, tg in zip(inputs, indexes, bottom_inputs, top_inputs, IoU, bottom_IoU, top_IoU,\
                         update_flag, top_update_flag, bottom_update_flag, targets):
             if ctx.update_method == "momentum":
@@ -174,34 +176,70 @@ def hm_part(inputs, bottom_inputs, top_inputs, indexes, labels, cluster_mean, cl
 class HM(autograd.Function):
     @staticmethod
     @custom_fwd(cast_inputs=torch.float32)
-    def forward(ctx, inputs, indexes, labels, features, cluster_mean, IoU, update_method, momentum, update_flag, IoU_memory_clip, targets):
+    def forward(ctx, inputs_unnorm, inputs, inputs_log_var, indexes, labels, features, features_std, cluster_mean, cluster_std, IoU, update_method, momentum, update_flag, IoU_memory_clip, targets, sample_times):
         ctx.features = features # memory特征
+        ctx.features_std = features_std
         ctx.cluster_mean = cluster_mean
+        ctx.cluster_std = cluster_std
         ctx.labels = labels
         ctx.momentum = momentum
         ctx.update_method = update_method
         ctx.update_flag = update_flag
         ctx.IoU_memory_clip = IoU_memory_clip
         ctx.targets = targets
+        ctx.sample_times = sample_times
 
-        outputs = inputs.mm(ctx.cluster_mean.t())
+        # 2. GMM, 固定的聚类中心
+        # outputs = []
+        # for i in range(sample_times):
+        #     outputs.append(inputs[i].mm(ctx.cluster_mean.t()))
+        # outputs = torch.stack(outputs, dim=-1)
+
+        # 2. GMM, 聚类中心采样，样本采样
+        outputs = []
+        ctx.center_sample = []
+        for i in range(sample_times):
+            z = torch.normal(0, 1.0, size=(256,))[None].cuda()  # [None, 256]
+            cluster_std = torch.sqrt(ctx.cluster_std)   #[B, 256]
+            center_sample = ctx.cluster_mean# + cluster_std * z
+            # center_sample = F.normalize(center_sample)
+            outputs.append(inputs[i].mm(center_sample.t()))
+            ctx.center_sample.append(center_sample)
+        outputs = torch.stack(outputs, dim=-1)    # [B, N, K]
+        ctx.center_sample = torch.stack(ctx.center_sample, dim=-1)    # [N, D, K]
+        
+        # # 3. 聚类中心做采样
+        # ctx.sample = []
+        # for _ in range(sample_times):
+        #     z = torch.normal(0, 1.0, size=(256,))[None, :, None].cuda()
+        #     sample = ctx.cluster_mean + (ctx.cluster_std @ z).squeeze(-1)   # cluster_mean:[N, 256], cluster_std: [N, 256, 256],   z:[N, 256]
+        #     outputs.append(inputs.mm(sample.t()))
+        #     ctx.sample.append(sample)
+        # outputs = torch.stack(outputs, dim=-1)    # [B, N, K]
+        # ctx.sample = torch.stack(ctx.sample, dim=1)    # [N, K, D]
 
         all_inputs = all_gather_tensor(inputs)
         all_indexes = all_gather_tensor(indexes)
         all_IoU = all_gather_tensor(IoU)
-        ctx.save_for_backward(all_inputs, all_indexes, all_IoU)
+        all_inputs_log_var = all_gather_tensor(inputs_log_var)
+        all_inputs_unnorm = all_gather_tensor(inputs_unnorm)
+
+        ctx.save_for_backward(all_inputs_unnorm, all_inputs, all_inputs_log_var, all_indexes, all_IoU)
         return outputs
 
     @staticmethod
     @custom_bwd
     def backward(ctx, grad_outputs):
-        inputs, indexes, IoU = ctx.saved_tensors
+        inputs_unnorm, inputs, inputs_log_var, indexes, IoU = ctx.saved_tensors
         grad_inputs = None
         if ctx.needs_input_grad[0]:
-            grad_inputs = grad_outputs.mm(ctx.cluster_mean)
+            grad_inputs = []
+            for i in range(ctx.sample_times):
+                grad_inputs.append(grad_outputs[:, :, i].mm(ctx.center_sample[:, :, i]))
+            grad_inputs = torch.stack(grad_inputs, dim=0)
 
         IoU = torch.clamp(IoU, min=ctx.IoU_memory_clip[0], max=ctx.IoU_memory_clip[1])
-        for x, y, iou, uf, tg in zip(inputs, indexes, IoU, ctx.update_flag, ctx.targets):
+        for x, xlv, y, iou, uf, tg in zip(inputs[0], inputs_log_var, indexes, IoU, ctx.update_flag, ctx.targets):
             if ctx.update_method == "momentum":
                 ctx.features[y] = ctx.momentum * ctx.features[y] + (1.0 - ctx.momentum) * x
             elif ctx.update_method == "iou":
@@ -209,38 +247,33 @@ class HM(autograd.Function):
             elif ctx.update_method == "max_iou":
                 if uf: 
                     ctx.features[y] = x  # memory还是用特征均值更新
+                    ctx.features_std[y] = xlv
             # ctx.features[y] /= ctx.features[y].norm()
             # ctx.cluster_mean[tg], ctx.cluster_std[tg] = get_mean_conv(ctx.features[ctx.labels == tg])
             # ctx.cluster_mean[tg], _ = get_mean_conv(ctx.features[ctx.labels == tg])
-            ctx.cluster_mean[tg] = get_weighted_mean(ctx.features[ctx.labels == tg])
+            ctx.cluster_mean[tg], ctx.cluster_std[tg] = GMM(ctx.features[ctx.labels == tg], ctx.features_std[ctx.labels == tg])
 
         return grad_inputs, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None
 
+def GMM(memory_features, memory_features_std):
+    gmm_mean = torch.mean(memory_features, dim=0)
+    var = torch.exp(memory_features_std)
+    gmm_var = torch.mean(var, dim=0)
+    return gmm_mean, gmm_var
 
-def get_weighted_mean(memory_features):
-    """
-        距离聚类中心越近，权重越高
-    """
-    mean = torch.mean(memory_features, dim=0)
-    return mean
-    cos_sim = memory_features.mm(mean[None].t())
-    cos_sim_sf = F.softmax(cos_sim / 0.05, dim=0)
-    weighted_mean = torch.sum(memory_features * cos_sim_sf, dim=0)
-    return weighted_mean
-
-def hm(inputs, indexes, labels, features, cluster_mean, IoU, update_method=None, momentum=0.5, update_flag=None, IoU_memory_clip=0.2, targets=None):
+def hm(inputs_unnorm, inputs, id_pred_log_var, indexes, labels, features, features_std, cluster_mean, cluster_std, IoU, update_method=None, momentum=0.5, update_flag=None, IoU_memory_clip=0.2, targets=None, sample_times=1):
     return HM.apply(
-        inputs, indexes, labels, features, cluster_mean, IoU, update_method, torch.Tensor([momentum]).to(inputs.device), update_flag, \
-            torch.Tensor(IoU_memory_clip).to(inputs.device), targets
+        inputs_unnorm, inputs, id_pred_log_var, indexes, labels, features, features_std, cluster_mean, cluster_std, IoU, update_method, torch.Tensor([momentum]).to(inputs.device), update_flag, \
+            torch.Tensor(IoU_memory_clip).to(inputs.device), targets, sample_times
     )
 
-class HybridMemoryMultiFocalPercentCluster(nn.Module):
+class HybridMemoryMultiFocalPercentUncertainty(nn.Module):
 
     def __init__(self, num_features, num_memory, temp=0.05, momentum=0.2, cluster_top_percent=0.1, instance_top_percent=1, \
                     use_cluster_hard_loss=True, use_instance_hard_loss=False, use_hybrid_loss=False, testing=False, use_uncertainty_loss=False,
                     use_IoU_loss=False, use_IoU_memory=False, IoU_loss_clip=[0.7, 1.0], IoU_memory_clip=[0.2, 0.9], IoU_momentum=0.2,
                     use_part_feat=False, co_learning=False, use_hard_mining=False, use_max_IoU_bbox=False, update_method=None):
-        super(HybridMemoryMultiFocalPercentCluster, self).__init__()
+        super(HybridMemoryMultiFocalPercentUncertainty, self).__init__()
         self.use_cluster_hard_loss = use_cluster_hard_loss
         self.use_instance_hard_loss = use_instance_hard_loss
         self.use_hybrid_loss = use_hybrid_loss
@@ -253,7 +286,7 @@ class HybridMemoryMultiFocalPercentCluster(nn.Module):
         self.use_part_feat = use_part_feat
         self.update_method = update_method
         self.use_cluster_memory = True
-        
+
         if testing == True:
             num_memory = 500
         self.num_memory = num_memory
@@ -269,10 +302,15 @@ class HybridMemoryMultiFocalPercentCluster(nn.Module):
         self.hard_mining = use_hard_mining
         self.use_max_IoU_bbox = use_max_IoU_bbox
         self.iou_threshold = 0.
+        self.kl_weight = 1e-4
+        self.sample_times = 10
 
         self.idx = torch.zeros(num_memory).long()
         self.register_buffer("features", torch.zeros(num_memory, num_features))
+        self.register_buffer("features_unnorm", torch.zeros(num_memory, num_features))
+        self.register_buffer("features_std", torch.zeros(self.num_memory, self.num_features))
         self.register_buffer("labels", torch.zeros(num_memory).long())
+        self.register_buffer("mIoU", torch.zeros(num_memory, 3).float())
 
         if self.use_part_feat:
             self.register_buffer("bottom_features", torch.zeros(num_memory, num_features))
@@ -280,45 +318,41 @@ class HybridMemoryMultiFocalPercentCluster(nn.Module):
         if self.co_learning:
             self.register_buffer("label2s", torch.zeros(num_memory).long())
     
-    
     @torch.no_grad()
-    def _init_cluster(self, cluster_mean):
+    def _init_cluster(self, cluster_mean, cluster_std):
         self.register_buffer("cluster_mean", torch.zeros_like(cluster_mean))
+        self.register_buffer("cluster_std", torch.zeros_like(cluster_std))
         self.cluster_mean.data.copy_(cluster_mean.float().to(self.labels.device))
+        self.cluster_std.data.copy_(cluster_std.float().to(self.labels.device))
 
     def _del_cluster(self):
         delattr(self, 'cluster_mean')
+        delattr(self, 'cluster_std')
     
     @torch.no_grad()
     def _init_ids(self, ids):
-        self.idx[:ids.shape[0]].data.copy_(ids.long().to(self.labels.device))
+        self.idx.data.copy_(ids.long().to(self.labels.device))
 
     @torch.no_grad()
-    def _update_feature(self, features):
-        features = F.normalize(features, p=2, dim=1)
-        self.features[:features.shape[0]].data.copy_(features.float().to(self.features.device))
+    def _update_feature(self, features, features_unnorm, features_std):
+        self.features.data.copy_(features.float().to(self.features.device))
+        self.features_unnorm.data.copy_(features_unnorm.float().to(self.features_unnorm.device))
+        self.features_std.data.copy_(features_std.float().to(self.features_std.device))
 
     @torch.no_grad()
     def _update_bottom_feature(self, features):
         features = F.normalize(features, p=2, dim=1)
-        self.bottom_features[:features.shape[0]].data.copy_(features.float().to(self.features.device))
+        self.bottom_features.data.copy_(features.float().to(self.features.device))
 
     @torch.no_grad()
     def _update_top_feature(self, features):
         features = F.normalize(features, p=2, dim=1)
-        self.top_features[:features.shape[0]].data.copy_(features.float().to(self.features.device))
+        self.top_features.data.copy_(features.float().to(self.features.device))
 
     @torch.no_grad()
     def _update_label(self, labels):
         self.labels.data.copy_(labels.long().to(self.labels.device))
-
-    @torch.no_grad()
-    def _update_blabel(self, blabels):
-        self.blabels.data.copy_(blabels.long().to(self.blabels.device))
-
-    @torch.no_grad()
-    def _update_tlabel(self, tlabels):
-        self.tlabels.data.copy_(tlabels.long().to(self.tlabels.device))
+        self.mIoU.data.copy_(torch.ones(len(self.mIoU), 3).float()).to(self.mIoU.device)
     
     @torch.no_grad()
     def get_cluster_ids(self, indexes):
@@ -329,12 +363,12 @@ class HybridMemoryMultiFocalPercentCluster(nn.Module):
         return self.features[indexes].clone()
 
     @torch.no_grad()
-    def get_all_features(self):
-        return self.features.clone()
-
-    @torch.no_grad()
     def get_all_cluster_ids(self):
         return self.labels.clone()
+
+    @torch.no_grad()
+    def get_all_features(self):
+        return self.features.clone()
 
     def masked_softmax_multi_focal(self, vec, mask, dim=1, targets=None, epsilon=1e-6, IoU=None, indexes=None, labels=None):
         """
@@ -371,7 +405,7 @@ class HybridMemoryMultiFocalPercentCluster(nn.Module):
         masked_sums = masked_exps.sum(dim, keepdim=True) + epsilon
         return masked_exps / masked_sums    # softmax
 
-    def get_hard_cluster_loss_cluster(self, labels, sim, targets, IoU, indexes):
+    def get_hard_cluster_loss_cluster(self, labels, sim, targets, IoU, indexes, id_pred_log_var):
         """
             :sim: [B, C]
             :targets: [B]
@@ -388,9 +422,13 @@ class HybridMemoryMultiFocalPercentCluster(nn.Module):
         mask = mask.expand_as(sim)
         masked_sim = self.masked_softmax_multi_focal(sim.t().contiguous(), mask.t().contiguous(), targets=targets, IoU=IoU, indexes=indexes, labels=labels) # sim: u * B, mask:u * B, masked_sim: B * u
         cluster_hard_loss = F.nll_loss(torch.log(masked_sim + 1e-6), targets, reduce=False)
+
+        # 加入方差损失
+        # id_pred_var = torch.exp(id_pred_log_var)
+        # id_pred_var_mean = 2 * id_pred_var.mean(dim=-1)
+        # cluster_hard_loss /= (id_pred_var_mean + 1e-6)
         cluster_hard_loss = cluster_hard_loss.mean()
-        
-        return cluster_hard_loss
+        return cluster_hard_loss#, average_std, average_std_exclude_outliers
 
     def get_hard_cluster_loss(self, labels, cluster_inputs, targets, IoU, indexes, features):
         """
@@ -487,13 +525,12 @@ class HybridMemoryMultiFocalPercentCluster(nn.Module):
         m2o_loss /= len(proposals_nums)
         return m2o_loss
 
-    def forward(self, feats, indexes, IoU, part_feats, top_IoU, bottom_IoU, pos_is_gt_list):
+    def forward(self, feats, indexes, IoU, part_feats, top_IoU, bottom_IoU, pos_is_gt_list, id_pred_log_var):
         """
             :feats: [B, 256]
             :indexes: [B, ]
             :IoU: [B, ]
         """
-
         feats = F.normalize(feats, p=2, dim=1)
         update_flag, iou_target = self.get_update_flag(indexes, IoU)
         top_update_flag, top_iou_target = self.get_update_flag(indexes, top_IoU)
@@ -503,6 +540,25 @@ class HybridMemoryMultiFocalPercentCluster(nn.Module):
         targets = self.labels[indexes].clone()
         labels = self.labels.clone() # [N, ]
 
+        if id_pred_log_var is not None: # 计算KL( N(u,σ) || N(0,1) )    //TODO: feats是否需要norm
+            kld_loss = 0.5 * (torch.exp(id_pred_log_var) + torch.pow(feats, 2) - 1. - id_pred_log_var)
+            kld_loss = kld_loss.sum(dim=1).mean()
+            losses["kld_loss"] = self.kl_weight * kld_loss
+            # losses["log_val_loss"] = id_pred_log_var.mean() / 2  # log(var)趋向于0,相当于让var趋向于1
+        
+        feats_list = []
+        for i in range(self.sample_times):
+            if i == 0:
+                feats_sample = F.normalize(feats)
+            else:
+                # import ipdb;    ipdb.set_trace()
+                feats_std = torch.exp(id_pred_log_var).sqrt()
+                z = torch.normal(0, 1.0, size=(256,))[None].cuda()  # [None, 256]
+                feats_sample = feats + z * feats_std
+                feats_sample = F.normalize(feats_sample)
+            feats_list.append(feats_sample)
+        feats_list = torch.stack(feats_list, dim=0)
+
         if self.use_part_feat:
             bottom_feats = F.normalize(part_feats[:, :256], p=2, dim=1)
             top_feats = F.normalize(part_feats[:, 256:], p=2, dim=1)
@@ -511,8 +567,8 @@ class HybridMemoryMultiFocalPercentCluster(nn.Module):
                                                 update_flag, top_update_flag, bottom_update_flag, self.update_method, targets, self.sample_times)   # [B, N]
             inputs, bottom_inputs, top_inputs = inputs / self.temp, bottom_inputs / self.temp, top_inputs / self.temp
         else:
-            inputs = hm(feats, indexes, labels, self.features, self.cluster_mean, IoU, self.update_method, self.momentum, update_flag, self.IoU_memory_clip, \
-                        targets)   # [B, N]
+            inputs = hm(feats, feats_list, id_pred_log_var, indexes, labels, self.features, self.features_std, self.cluster_mean, self.cluster_std, IoU, self.update_method, self.momentum, update_flag, self.IoU_memory_clip, \
+                        targets, self.sample_times)   # [B, N]
             inputs /= self.temp
 
         if self.use_max_IoU_bbox:
@@ -531,11 +587,15 @@ class HybridMemoryMultiFocalPercentCluster(nn.Module):
             losses["global_cluster_hard_loss"] = torch.tensor(0.)
             losses["part_cluster_hard_loss"] = torch.tensor(0.)
             if targets.shape[0] > 0:
-                losses["global_cluster_hard_loss"] = self.get_hard_cluster_loss_cluster(labels.clone(), inputs, global_targets, IoU, global_indexes)
+                losses["global_cluster_hard_loss"] = self.get_hard_cluster_loss_cluster(labels.clone(), inputs[:, :, 0], global_targets, IoU, global_indexes, id_pred_log_var)
+                losses["global_cluster_hard_loss_sample"] = []
+                for k in range(1, self.sample_times):
+                    losses["global_cluster_hard_loss_sample"].append(self.get_hard_cluster_loss_cluster(labels.clone(), inputs[:, :, k], global_targets, IoU, global_indexes, id_pred_log_var))
+                losses["global_cluster_hard_loss_sample"] = torch.mean(torch.stack(losses["global_cluster_hard_loss_sample"])) * 0.2
  
                 if self.use_part_feat:
                     bottom_cluster_hard_loss = self.get_hard_cluster_loss(labels.clone(), bottom_inputs, bottom_targets, bottom_IoU, bottom_indexes, bottom_feats)
                     top_cluster_hard_loss = self.get_hard_cluster_loss(labels.clone(), top_inputs, top_targets, top_IoU, top_indexes, top_feats)
                     losses["part_cluster_hard_loss"] = bottom_cluster_hard_loss + top_cluster_hard_loss
-
+            # print(losses)
         return losses

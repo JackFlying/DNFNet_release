@@ -251,13 +251,13 @@ def hm(inputs, id_pred_log_var, indexes, labels, features, features_std, cluster
             torch.Tensor(IoU_memory_clip).to(inputs.device), targets, sample_times
     )
 
-class HybridMemoryMultiFocalPercentCluster2(nn.Module):
+class HybridMemoryMultiFocalPercentMCDropout(nn.Module):
 
     def __init__(self, num_features, num_memory, temp=0.05, momentum=0.2, cluster_top_percent=0.1, instance_top_percent=1, \
                     use_cluster_hard_loss=True, use_instance_hard_loss=False, use_hybrid_loss=False, testing=False, use_uncertainty_loss=False,
                     use_IoU_loss=False, use_IoU_memory=False, IoU_loss_clip=[0.7, 1.0], IoU_memory_clip=[0.2, 0.9], IoU_momentum=0.2,
                     use_part_feat=False, co_learning=False, use_hard_mining=False, use_max_IoU_bbox=False, update_method=None):
-        super(HybridMemoryMultiFocalPercentCluster2, self).__init__()
+        super(HybridMemoryMultiFocalPercentMCDropout, self).__init__()
         self.use_cluster_hard_loss = use_cluster_hard_loss
         self.use_instance_hard_loss = use_instance_hard_loss
         self.use_hybrid_loss = use_hybrid_loss
@@ -520,28 +520,9 @@ class HybridMemoryMultiFocalPercentCluster2(nn.Module):
         targets = self.labels[indexes].clone()
         labels = self.labels.clone() # [N, ]
 
-        # if id_pred_log_var is not None: # 计算KL( N(u,σ) || N(0,1) )    //TODO: feats是否需要norm
-        #     kld_loss = 0.5 * (torch.exp(id_pred_log_var) + torch.pow(feats, 2) - 1. - id_pred_log_var)
-        #     kld_loss = kld_loss.sum(dim=1).mean()
-        #     losses["kld_loss"] = self.kl_weight * kld_loss
-        #     # losses["log_val_loss"] = id_pred_log_var.mean() / 2  # log(var)趋向于0,相当于让var趋向于1
-        
-        # feats_list = []
-        # import ipdb;    ipdb.set_trace()
         mean = feats.mean(dim=1)
         var = ((feats - mean[:, None])**2).sum(dim=1) / feats.shape[1]
-        
-        # for i in range(self.sample_times):
-        #     if i == 0:
-        #         feats_sample = F.normalize(feats)
-        #     else:
-        #         # import ipdb;    ipdb.set_trace()
-        #         feats_std = torch.exp(id_pred_log_var).sqrt()
-        #         z = torch.normal(0, 1.0, size=(256,))[None].cuda()  # [None, 256]
-        #         feats_sample = feats + z * feats_std
-        #         feats_sample = F.normalize(feats_sample)
-        #     feats_list.append(feats_sample)
-        # feats_list = torch.stack(feats_list, dim=0)
+
         
         if self.use_part_feat:
             bottom_feats = F.normalize(part_feats[:, :256], p=2, dim=1)
@@ -580,5 +561,5 @@ class HybridMemoryMultiFocalPercentCluster2(nn.Module):
                     bottom_cluster_hard_loss = self.get_hard_cluster_loss(labels.clone(), bottom_inputs, bottom_targets, bottom_IoU, bottom_indexes, bottom_feats)
                     top_cluster_hard_loss = self.get_hard_cluster_loss(labels.clone(), top_inputs, top_targets, top_IoU, top_indexes, top_feats)
                     losses["part_cluster_hard_loss"] = bottom_cluster_hard_loss + top_cluster_hard_loss
-            # print(losses)
+
         return losses

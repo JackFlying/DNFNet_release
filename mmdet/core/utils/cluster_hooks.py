@@ -64,7 +64,8 @@ class ClusterHook(Hook):
             use_gaussion = True
         else:
             use_gaussion = False
-        memory_features_mean, memory_features_std = [], []
+            
+        memory_features_std = []
         start_ind = 0
         for idx, dataset in enumerate(self.datasets):
             if self.cfg.testing:
@@ -80,12 +81,6 @@ class ClusterHook(Hook):
                 memory_features_std.append(
                     runner.model.module.roi_head.bbox_head.loss_reid
                     .features_std[start_ind : start_ind + dataset.id_num]
-                    .clone()
-                    .cpu() 
-                )
-                memory_features_mean.append(
-                    runner.model.module.roi_head.bbox_head.loss_reid
-                    .features_unnorm[start_ind : start_ind + dataset.id_num]
                     .clone()
                     .cpu() 
                 )
@@ -154,11 +149,14 @@ class ClusterHook(Hook):
             memory_tlabels = torch.cat(memory_tlabels).view(-1)
         
         if hasattr(runner.model.module.roi_head.bbox_head.loss_reid, "use_cluster_memory"):
-            # means, stds = get_gaussion_distributation(memory_features[0], memory_labels)
-            means, stds = GMM(memory_features[0], memory_features_std[0], memory_labels)
             if hasattr(runner.model.module.roi_head.bbox_head.loss_reid, "cluster_mean"):
                 runner.model.module.roi_head.bbox_head.loss_reid._del_cluster()
-            runner.model.module.roi_head.bbox_head.loss_reid._init_cluster(means.cuda(), stds.cuda())
+            if hasattr(runner.model.module.roi_head.bbox_head.loss_reid, "cluster_std"):
+                means, stds = GMM(memory_features[0], memory_features_std[0], memory_labels)
+                runner.model.module.roi_head.bbox_head.loss_reid._init_cluster(means.cuda(), stds.cuda())
+            else:
+                means, stds = get_gaussion_distributation(memory_features[0], memory_labels)
+                runner.model.module.roi_head.bbox_head.loss_reid._init_cluster(means.cuda())
         
         runner.model.module.roi_head.bbox_head.loss_reid._update_label(memory_labels)
         # if self.part_based_uncertainty:
