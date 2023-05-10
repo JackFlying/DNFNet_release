@@ -220,10 +220,11 @@ class HM(autograd.Function):
 def get_weighted_mean(memory_features):
     """
         距离聚类中心越近，权重越高
+        memory_features: [K, D]
     """
     mean = torch.mean(memory_features, dim=0)
-    return mean
-    cos_sim = memory_features.mm(mean[None].t())
+    # return mean
+    cos_sim = 1 - memory_features.mm(mean[None].t())    # 余弦相似度越小,越相似
     cos_sim_sf = F.softmax(cos_sim / 0.05, dim=0)
     weighted_mean = torch.sum(memory_features * cos_sim_sf, dim=0)
     return weighted_mean
