@@ -478,6 +478,7 @@ def re_ranking_for_instance(labels, memory_features, k1):
                 k_reciprocal_expansion_index = np.append(k_reciprocal_expansion_index,candidate_k_reciprocal_index)
         k_reciprocal_expansion_index = np.unique(k_reciprocal_expansion_index)
         rank_k_matrix[i, k_reciprocal_expansion_index] = 1
+    
 
     label2set = collections.defaultdict(list)
     for i, label in enumerate(labels):

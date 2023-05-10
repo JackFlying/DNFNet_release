@@ -463,6 +463,10 @@ def label_generator_FINCH_context_SpCL_Plus(cfg, features, cuda=True, indep_thre
         scene_features = torch.load("./saved_file/scene_features.pth")
         scene_sim = scene_features.mm(scene_features.t())
 
+    jaccard_coeff = 0.3
+    jaccard_dist = re_ranking_for_instance(features, k1=100)
+    instance_sim = (1 - jaccard_coeff) * instance_sim + jaccard_coeff * jaccard_dist
+    # import ipdb;    ipdb.set_trace()
     # scene_sim = img_sim
     # if cfg.PSEUDO_LABELS.context_clip:
     #     scene_sim = scene_sim * (scene_sim > cfg.PSEUDO_LABELS.threshold)
@@ -533,3 +537,69 @@ def get_intra_context_mask(inds):
             for j in range(0, i, 1):
                 intra_context_mask[tmp_id[i]][tmp_id[j]] = intra_context_mask[tmp_id[j]][tmp_id[i]] = False
     return intra_context_mask
+
+def pairwiseDis(qFeature, gFeature):  # 246s
+    # 计算余弦距离,数值越大,相似度越低
+    x, y = F.normalize(qFeature), F.normalize(gFeature)
+    m, n = x.shape[0], y.shape[0]
+    disMat = torch.pow(x, 2).sum(dim=1, keepdim=True).expand(m, n) + \
+             torch.pow(y, 2).sum(dim=1, keepdim=True).expand(n, m).t()
+    disMat.addmm_(1, -2, x, y.t())
+    return disMat.clamp_(min=1e-5)
+
+@torch.no_grad()
+def re_ranking_for_instance(memory_features, k1, k2=6):
+    """
+        求扩展K互最近邻
+        rank_k_matrix: [N, N]
+    """
+    N = memory_features.shape[0]
+    original_dist = pairwiseDis(memory_features, memory_features).cpu().numpy()
+    original_dist = np.transpose(original_dist / (np.max(original_dist, axis=0)))
+    V = np.zeros_like(original_dist).astype(np.float16)
+    initial_rank = np.argsort(original_dist).astype(np.int32)
+    for i in range(N):
+        forward_k_neigh_index = initial_rank[i,:k1+1] 
+        backward_k_neigh_index = initial_rank[forward_k_neigh_index,:k1+1]
+        fi = np.where(backward_k_neigh_index==i)[0]
+        k_reciprocal_index = forward_k_neigh_index[fi]
+        k_reciprocal_expansion_index = k_reciprocal_index
+        for j in range(len(k_reciprocal_index)):
+            candidate = k_reciprocal_index[j]
+            candidate_forward_k_neigh_index = initial_rank[candidate,:int(np.around(k1/2))+1]
+            candidate_backward_k_neigh_index = initial_rank[candidate_forward_k_neigh_index,:int(np.around(k1/2))+1]
+            fi_candidate = np.where(candidate_backward_k_neigh_index == candidate)[0]
+            candidate_k_reciprocal_index = candidate_forward_k_neigh_index[fi_candidate]
+            if len(np.intersect1d(candidate_k_reciprocal_index,k_reciprocal_index))> 2/3*len(candidate_k_reciprocal_index):
+                k_reciprocal_expansion_index = np.append(k_reciprocal_expansion_index,candidate_k_reciprocal_index)
+        
+        k_reciprocal_expansion_index = np.unique(k_reciprocal_expansion_index)
+        # import ipdb;    ipdb.set_trace()
+        weight = np.exp(-original_dist[i, k_reciprocal_expansion_index])
+        V[i, k_reciprocal_expansion_index] = weight / np.sum(weight)
+
+    if k2 != 1:
+        V_qe = np.zeros_like(V, dtype=np.float16)
+        for i in range(N):
+            V_qe[i, :] = np.mean(V[initial_rank[i, :k2], :], axis=0)
+        V = V_qe
+        del V_qe
+    del initial_rank
+    invIndex = []
+    for i in range(N):
+        invIndex.append(np.where(V[:, i] != 0)[0])  # len(invIndex)=N
+
+    jaccard_dist = np.zeros_like(original_dist, dtype=np.float16)
+    for i in range(N):
+        temp_min = np.zeros(shape=[1, N], dtype=np.float16)
+        indNonZero = np.where(V[i, :] != 0)[0]
+        indImages = [invIndex[ind] for ind in indNonZero]
+        for j in range(len(indNonZero)):
+            temp_min[0, indImages[j]] = temp_min[0, indImages[j]] + np.minimum(V[i, indNonZero[j]], V[indImages[j], indNonZero[j]])
+        jaccard_dist[i] = 1 - temp_min / (2 - temp_min)
+
+    pos_bool = (jaccard_dist < 0)
+    jaccard_dist[pos_bool] = 0.0
+    
+    jaccard_dist = 1 - jaccard_dist
+    return jaccard_dist

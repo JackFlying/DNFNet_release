@@ -223,7 +223,7 @@ def get_weighted_mean(memory_features):
         memory_features: [K, D]
     """
     mean = torch.mean(memory_features, dim=0)
-    # return mean
+    return mean
     cos_sim = 1 - memory_features.mm(mean[None].t())    # 余弦相似度越小,越相似
     cos_sim_sf = F.softmax(cos_sim / 0.05, dim=0)
     weighted_mean = torch.sum(memory_features * cos_sim_sf, dim=0)
