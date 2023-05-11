@@ -601,5 +601,6 @@ def re_ranking_for_instance(memory_features, k1, k2=6):
     pos_bool = (jaccard_dist < 0)
     jaccard_dist[pos_bool] = 0.0
     
+    
     jaccard_dist = 1 - jaccard_dist
     return jaccard_dist
