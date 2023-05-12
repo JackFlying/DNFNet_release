@@ -463,9 +463,10 @@ def label_generator_FINCH_context_SpCL_Plus(cfg, features, cuda=True, indep_thre
         scene_features = torch.load("./saved_file/scene_features.pth")
         scene_sim = scene_features.mm(scene_features.t())
 
-    jaccard_coeff = 0.3
-    jaccard_dist = re_ranking_for_instance(features, k1=100)
-    instance_sim = (1 - jaccard_coeff) * instance_sim + jaccard_coeff * jaccard_dist
+    # jaccard_coeff = 0.3
+    # jaccard_dist = re_ranking_for_instance(features, k1=20)
+    # instance_sim = (1 - jaccard_coeff) * instance_sim + jaccard_coeff * jaccard_dist
+    
     # import ipdb;    ipdb.set_trace()
     # scene_sim = img_sim
     # if cfg.PSEUDO_LABELS.context_clip:
