@@ -463,8 +463,8 @@ def label_generator_FINCH_context_SpCL_Plus(cfg, features, cuda=True, indep_thre
         scene_features = torch.load("./saved_file/scene_features.pth")
         scene_sim = scene_features.mm(scene_features.t())
 
-    # jaccard_coeff = 0.3
-    # jaccard_dist = re_ranking_for_instance(features, k1=20)
+    # jaccard_coeff = 0.1
+    # jaccard_dist = re_ranking_for_instance(features, k1=100)
     # instance_sim = (1 - jaccard_coeff) * instance_sim + jaccard_coeff * jaccard_dist
     
     # import ipdb;    ipdb.set_trace()
@@ -575,7 +575,6 @@ def re_ranking_for_instance(memory_features, k1, k2=6):
                 k_reciprocal_expansion_index = np.append(k_reciprocal_expansion_index,candidate_k_reciprocal_index)
         
         k_reciprocal_expansion_index = np.unique(k_reciprocal_expansion_index)
-        # import ipdb;    ipdb.set_trace()
         weight = np.exp(-original_dist[i, k_reciprocal_expansion_index])
         V[i, k_reciprocal_expansion_index] = weight / np.sum(weight)
 
@@ -601,7 +600,6 @@ def re_ranking_for_instance(memory_features, k1, k2=6):
 
     pos_bool = (jaccard_dist < 0)
     jaccard_dist[pos_bool] = 0.0
-    
     
     jaccard_dist = 1 - jaccard_dist
     return jaccard_dist

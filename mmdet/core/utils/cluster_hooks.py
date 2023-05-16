@@ -90,8 +90,11 @@ class ClusterHook(Hook):
                     image_inds=runner.model.module.roi_head.bbox_head.loss_reid.idx[:len(memory_features[0])].clone().cpu(),
                     cfg=self.cfg
                 )
-                uncertainty = get_uncertainty_by_centroid(pseudo_labels, memory_features, self.logger)
-                pseudo_labels = transfer_label_noise_to_outlier(uncertainty, pseudo_labels[0])
+                uncertainty, new_labels = get_uncertainty_by_centroid(pseudo_labels, memory_features, self.logger)
+                # pseudo_labels = reassignment_labels(new_labels.tolist())
+                # pseudo_labels = [pseudo_labels]
+                torch.save(uncertainty, os.path.join("saved_file", "uncertainty.pth"))
+                # pseudo_labels = transfer_label_noise_to_outlier(uncertainty, pseudo_labels[0])
                 # TODO 根据距离聚类中心的距离求置信度
             else:
                 self.cfg.PSEUDO_LABELS.part_feat.use_part_feat = True   # 为了防止新的epoch自动变成0
@@ -107,7 +110,7 @@ class ClusterHook(Hook):
                         image_inds=runner.model.module.roi_head.bbox_head.loss_reid.idx[:len(memory_features[0])].clone().cpu(),
                         cfg=self.cfg
                     )
-                    uncertainty = self.get_uncertainty_by_part(pseudo_labels, pseudo_label2s, memory_features)
+                    uncertainty = get_uncertainty_by_part(pseudo_labels, pseudo_label2s, memory_features, self.logger, self.cfg)
                     if self.cfg.PSEUDO_LABELS.hard_mining.use_hard_mining:
                         pseudo_labels = transfer_label_noise_to_outlier(uncertainty, pseudo_labels[0])
                     weight = get_weight_by_uncertainty(uncertainty, pseudo_labels[0])
@@ -158,57 +161,3 @@ class ClusterHook(Hook):
         self.logger.info('pseudo label range: '+ str(memory_labels.min())+ str(memory_labels.max()))
         self.logger.info("Finished updating pseudo label")
         self.epoch += 1
-
-    def get_softlabel_by_part(self, pseudo_labels, pseudo_label2s, memory_features):
-
-        pseudo_labels = torch.tensor(pseudo_labels) # [1, 500]
-        pseudo_label2s = torch.tensor(pseudo_label2s)   #[1, 500]
-        iou_mat = compute_label_iou_matrix(pseudo_label2s, pseudo_labels)
-        norm_iou_mat = (iou_mat.t() / iou_mat.t().sum(0)).t()   # [pseudo_label2s_numbers, pseudo_labels_numbers]
-        # uncertainty = norm_iou_mat.t()[pseudo_labels[0]][torch.arange(len(pseudo_labels[0])), pseudo_label2s[0]]
-
-        pred_temp = 30
-        label_center2s = generate_cluster_features(pseudo_label2s[0].tolist(), memory_features[0])
-        probs_perv = extract_probabilities(memory_features[0], label_center2s, pred_temp)
-        N, C = probs_perv.size(0), probs_perv.size(1)
-        onehot_labels = torch.full(size=(N, C), fill_value=0)   # [18048, 6104]
-        onehot_labels.scatter_(dim=1, index=torch.unsqueeze(pseudo_label2s[0], dim=1), value=1)
-        alpha = 0.9
-        probs_perv = alpha * onehot_labels + (1.0 - alpha) * probs_perv # pseudo_label2s修正pseudo_labels
-
-        prob_soft_labels = probs_perv.mm(norm_iou_mat)
-        beta = 0
-        hard_iou_labels = compute_sample_softlabels(pseudo_label2s, pseudo_labels, "iou", "original")
-        sample_soft_labels = beta * hard_iou_labels + (1.0 - beta) * prob_soft_labels   # 软硬标签的综合程度, [N, pseudo_labels_numbers]
-        # uncertainty = sample_soft_labels[torch.arange(len(pseudo_labels[0])), pseudo_labels[0]]
-        return sample_soft_labels
-
-    def get_uncertainty_by_part(self, pseudo_labels, pseudo_label2s, memory_features):
-        print("----------------------------get_uncertainty_by_part----------------------------")
-        pseudo_labels = torch.tensor(pseudo_labels) # [1, 500]
-        pseudo_label2s = torch.tensor(pseudo_label2s)   #[1, 500]
-        iou_mat = compute_label_iou_matrix(pseudo_label2s, pseudo_labels)
-        norm_iou_mat = (iou_mat.t() / iou_mat.t().sum(0)).t()   # [pseudo_label2s_numbers, pseudo_labels_numbers]
-        uncertainty = norm_iou_mat.t()[pseudo_labels[0]][torch.arange(len(pseudo_labels[0])), pseudo_label2s[0]]
-        # torch.save(uncertainty, os.path.join("saved_file", "uncertainty.pth"))
-        # pred_temp = 30
-        # label_center2s = generate_cluster_features(pseudo_label2s[0].tolist(), memory_features[0])
-        # probs_perv = extract_probabilities(memory_features[0], label_center2s, pred_temp)
-        # N, C = probs_perv.size(0), probs_perv.size(1)
-        # onehot_labels = torch.full(size=(N, C), fill_value=0)   # [18048, 6104]
-        # onehot_labels.scatter_(dim=1, index=torch.unsqueeze(pseudo_label2s[0], dim=1), value=1)
-        # alpha = 0.9
-        # probs_perv = alpha * onehot_labels + (1.0 - alpha) * probs_perv # pseudo_label2s修正pseudo_labels
-
-        # prob_soft_labels = probs_perv.mm(norm_iou_mat)
-        # beta = 0
-        # hard_iou_labels = compute_sample_softlabels(pseudo_label2s, pseudo_labels, "iou", "original")
-        # sample_soft_labels = beta * hard_iou_labels + (1.0 - beta) * prob_soft_labels   # 软硬标签的综合程度, [N, pseudo_labels_numbers]
-        # uncertainty = sample_soft_labels[torch.arange(len(pseudo_labels[0])), pseudo_labels[0]]
-        uncertainty_threshold = self.cfg.PSEUDO_LABELS.hard_mining.uncertainty_threshold
-        self.logger.info("uncertainty > uncertainty_threshold: " + str(len(uncertainty[uncertainty > uncertainty_threshold])))
-        self.logger.info("uncertainty < uncertainty_threshold: " + str(len(uncertainty[uncertainty <= uncertainty_threshold])))
-        if self.cfg.PSEUDO_LABELS.hard_mining.use_hard_mining:
-            uncertainty[uncertainty > uncertainty_threshold] = 1
-            uncertainty[uncertainty <= uncertainty_threshold] = 0
-        return uncertainty
