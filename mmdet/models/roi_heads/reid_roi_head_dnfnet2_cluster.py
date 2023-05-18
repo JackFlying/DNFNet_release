@@ -191,7 +191,8 @@ class ReidRoIHeadDNFNet2Cluster(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
     def _bbox_forward_train(self, x, sampling_results, gt_bboxes, gt_labels,
                             img_metas, **kwargs):
         """Run forward function and calculate loss for box head in training."""
-        self.sampler_num = [res.pos_bboxes.shape[0] + res.neg_bboxes.shape[0] for res in sampling_results]
+
+        # self.sampler_num = [res.pos_bboxes.shape[0] + res.neg_bboxes.shape[0] for res in sampling_results]
         rois = bbox2roi([res.bboxes for res in sampling_results])
 
         bbox_targets = self.bbox_head.get_targets(sampling_results, gt_bboxes,

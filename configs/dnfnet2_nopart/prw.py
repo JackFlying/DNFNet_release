@@ -225,7 +225,7 @@ PSEUDO_LABELS = dict(
 )
 # fp16 = dict(loss_scale=512.)
 workflow = [('train', 1)]
-evaluation = dict(start=16, interval=2, metric='bbox')
+evaluation = dict(start=6, interval=2, metric='bbox')
 testing = TEST
 save_features = True
 restart = False

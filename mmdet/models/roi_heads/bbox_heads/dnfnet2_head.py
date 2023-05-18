@@ -16,6 +16,29 @@ from mmdet.models.utils.ProtoNorm import PrototypeNorm1d, register_targets_for_p
 import os
 from mmcv.ops import DeformConv2dPack
 from mmcv.cnn import ConvModule, bias_init_with_prob, normal_init
+from itertools import accumulate
+
+
+class SEBlock(nn.Module):
+    def __init__(self, channels, reduction=16):
+        super(SEBlock, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc1 = nn.Linear(channels, channels // reduction)
+        self.fc2 = nn.Linear(channels // reduction, channels // 2)
+
+        nn.init.normal_(self.fc1.weight, 0, 0.001)
+        nn.init.constant_(self.fc1.bias, 0)
+        nn.init.normal_(self.fc2.weight, 0, 0.001)
+        nn.init.constant_(self.fc2.bias, 0)
+
+    def forward(self, x):
+        # import ipdb;    ipdb.set_trace()
+        b, c, _, _ = x.size()
+        y = self.avg_pool(x).view(b, c)
+        y = F.relu(self.fc1(y))
+        y = torch.sigmoid(self.fc2(y)).view(b, c // 2, 1, 1)
+        return y
+
 
 @HEADS.register_module()
 class DNFNet2Head(nn.Module):
@@ -132,6 +155,7 @@ class DNFNet2Head(nn.Module):
         self.feat_channels = 512
         self.stacked_convs = 2
         reg_class_agnostic = False
+        self.reid_feat_dim = 256
         
         if self.with_reg:
             out_dim_reg = 4 if reg_class_agnostic else 4 * num_classes
@@ -174,34 +198,33 @@ class DNFNet2Head(nn.Module):
             
         self.feature_h = 14
         self.feature_w = 6
-        self.fc_reid = nn.Sequential(
-                            nn.Linear(in_channels * self.feature_h * self.feature_w, 256),
-                            # nn.BatchNorm1d(num_features=256, affine=False)
-                        )
-        self.fc_reid_std = nn.Sequential(
-                            nn.Linear(in_channels * self.feature_h * self.feature_w, 256),
-                            # nn.BatchNorm1d(num_features=256, affine=False)
-                        )
-        self.fc_part_reid = nn.ModuleList([nn.Linear(in_channels * self.feature_h * self.feature_w // 2, 256),
-                                        nn.Linear(in_channels * self.feature_h * self.feature_w // 2, 256),
+        self.fc_reid = nn.Linear(in_channels * self.feature_h * self.feature_w, self.reid_feat_dim)
+        self.fc_part_reid = nn.ModuleList([nn.Linear(in_channels * self.feature_h * self.feature_w // 2, self.reid_feat_dim),
+                                        nn.Linear(in_channels * self.feature_h * self.feature_w // 2, self.reid_feat_dim),
                                     ])
         if self.norm_type is 'protonorm':
-            self.normalize = PrototypeNorm1d(256)
-            self.normalize_part = nn.ModuleList([PrototypeNorm1d(256), PrototypeNorm1d(256)])
-            self.bgnormalize = nn.BatchNorm1d(256)
-            self.bgnormalize_part = nn.ModuleList([nn.BatchNorm1d(256), nn.BatchNorm1d(256)]) 
+            self.normalize = PrototypeNorm1d(self.reid_feat_dim)
+            self.normalize_part = nn.ModuleList([PrototypeNorm1d(self.reid_feat_dim), PrototypeNorm1d(self.reid_feat_dim)])
+            self.bgnormalize = nn.BatchNorm1d(self.reid_feat_dim)
+            self.bgnormalize_part = nn.ModuleList([nn.BatchNorm1d(self.reid_feat_dim), nn.BatchNorm1d(self.reid_feat_dim)]) 
         elif self.norm_type is 'batchnorm':
-            self.normalize = nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine)
-            self.normalize_part = nn.ModuleList([nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine), \
-                                                nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine)])
+            self.normalize = nn.BatchNorm1d(num_features=self.reid_feat_dim, affine=self.use_bn_affine)
+            self.normalize_part = nn.ModuleList([nn.BatchNorm1d(num_features=self.reid_feat_dim, affine=self.use_bn_affine), \
+                                                nn.BatchNorm1d(num_features=self.reid_feat_dim, affine=self.use_bn_affine)])
             
-            self.bgnormalize = nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine)
-            self.bgnormalize_part = nn.ModuleList([nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine), \
-                                    nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine)])
+            self.bgnormalize = nn.BatchNorm1d(num_features=self.reid_feat_dim, affine=self.use_bn_affine)
+            self.bgnormalize_part = nn.ModuleList([nn.BatchNorm1d(num_features=self.reid_feat_dim, affine=self.use_bn_affine), \
+                                    nn.BatchNorm1d(num_features=self.reid_feat_dim, affine=self.use_bn_affine)])
 
-            self.normalize_std = nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine)
-            self.bgnormalize_std = nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine)
+            self.normalize_std = nn.BatchNorm1d(num_features=self.reid_feat_dim, affine=self.use_bn_affine)
+            self.bgnormalize_std = nn.BatchNorm1d(num_features=self.reid_feat_dim, affine=self.use_bn_affine)
         self.proposal_score_max = False
+        self.gt_fused_gru = nn.GRU(input_size=self.reid_feat_dim, hidden_size=self.reid_feat_dim, batch_first=True)
+        
+        self.se = SEBlock(in_channels * 2, reduction=16)
+        
+        # self.fc1 = nn.Linear(self.reid_feat_dim, self.reid_feat_dim)
+        # self.fc2 = nn.Linear(self.reid_feat_dim, self.reid_feat_dim)
 
     def init_weights(self):
         if self.with_cls:
@@ -216,6 +239,16 @@ class DNFNet2Head(nn.Module):
             for m in self.reg_convs:
                 if isinstance(m.conv, nn.Conv2d):
                     normal_init(m.conv, std=0.01)
+            
+        nn.init.normal_(self.fc_reid.weight, 0, 0.001)
+        nn.init.constant_(self.fc_reid.bias, 0)
+        
+        # nn.init.normal_(self.fc1.weight, 0, 0.001)
+        # nn.init.constant_(self.fc1.bias, 0)
+
+        # nn.init.normal_(self.fc2.weight, 0, 0.001)
+        # nn.init.constant_(self.fc2.bias, 0)
+
         
     @auto_fp16()
     def crop_forward(self, crop_feats1, crop_feats2):
@@ -275,9 +308,70 @@ class DNFNet2Head(nn.Module):
             update_flag[maxid] = True
         return update_flag
 
+    def symmetric_normalization(self, adj):
+        # import ipdb;    ipdb.set_trace()
+        # adj = adj + torch.eye(adj.size(0)).cuda()
+        degree = torch.sum(adj, dim=1)
+        D = torch.diag(torch.pow(degree, -0.5))
+        return torch.matmul(torch.matmul(D, adj), D)
+
+    def gcn(self, x, adj):
+        
+        x = F.relu(self.fc1(torch.matmul(adj, x)))
+        x = self.fc2(torch.matmul(adj, x))
+        return x
+
+    def integrate_context_by_SE(self, feats, targets, pos_is_gt_list):
+        """
+            每张图片中的样本和gt proposal拉进
+            pos_is_gt_list: gt的用1表示,预测的用0表示,但是预测和哪个gt之间有对应关系不明确
+        """
+        proposals_nums = [len(value) for value in pos_is_gt_list]
+        gt_nums = [torch.sum(value).item() for value in pos_is_gt_list]
+        pred_nums = [proposals_nums[i] - gt_nums[i] for i in range(len(proposals_nums))]
+        cumsum_pro_nums = list(accumulate([0] + proposals_nums))
+
+        fused_pred_feats = []
+        for i in range(1, len(cumsum_pro_nums)):
+            gt_num = gt_nums[i-1]
+            pred_num = pred_nums[i-1]
+            
+            gt_targets = targets[cumsum_pro_nums[i-1]:cumsum_pro_nums[i]][pos_is_gt_list[i-1]==1]
+            pred_targets = targets[cumsum_pro_nums[i-1]:cumsum_pro_nums[i]][pos_is_gt_list[i-1]==0]
+            
+            gt_feats = feats[cumsum_pro_nums[i-1]:cumsum_pro_nums[i]][pos_is_gt_list[i-1]==1]
+            pred_feats = feats[cumsum_pro_nums[i-1]:cumsum_pro_nums[i]][pos_is_gt_list[i-1]==0]
+
+            if gt_num > 0:
+                fused_pred_feats.append(gt_feats)   # 自身作为gt也要加入到list中
+            if pred_num > 0:
+                if gt_num > 0:
+                    pred_gt_matrix = (gt_targets[:, None] == pred_targets[None]).int()
+                    pred_gt_index = pred_gt_matrix.argmax(dim=0)
+                    pred_gt_feats = gt_feats[pred_gt_index]
+                    # SE block融合
+                    # import ipdb;    ipdb.set_trace()
+                    s = self.se(torch.cat([pred_gt_feats, pred_feats], dim=1))
+                    updated_pred_feats = pred_feats + s * pred_gt_feats
+                    fused_pred_feats.append(updated_pred_feats)
+                else:   # 有预测但是没有gt
+                    fused_pred_feats.append(pred_feats)
+        # import ipdb;    ipdb.set_trace()
+        fused_pred_feats = torch.cat(fused_pred_feats, dim=0)
+        assert fused_pred_feats.shape[0] == feats.shape[0]
+        return fused_pred_feats
+
     @auto_fp16()
-    def forward(self, x, part_feats, labels, rois, bbox_targets):
-        x = self.deform_conv(x)    
+    def forward(self, x, part_feats, labels, rois, bbox_targets, pos_is_gt_list):
+        x = self.deform_conv(x)
+
+        if self.training:
+            id_labels = labels[:, 1]
+            id_labels_fg = id_labels[id_labels != -2]
+            x_fg = x[id_labels != -2]
+            targets = self.loss_reid.get_cluster_ids(id_labels_fg)
+            x[id_labels != -2] = self.integrate_context_by_SE(x_fg, targets, pos_is_gt_list)
+
         cls_feat = x
         reg_feat = x
 
@@ -293,12 +387,21 @@ class DNFNet2Head(nn.Module):
         
         x_reid = x
         id_pred = self.fc_reid(x_reid.view(x_reid.size(0), -1))
-        id_pred_log_var = self.fc_reid_std(x_reid.view(x_reid.size(0), -1)) # 生成的是对角阵,正常应该是[256, 256],现在是256,就是取对角线
+
+        # if self.training:
+            # id_labels = labels[:, 1]
+            # id_pred_fg = id_pred[id_labels != -2]
+            # id_labels_fg = id_labels[id_labels != -2]
+            # # id_pred_fg = F.normalize(id_pred_fg)
+            # # sim = id_pred_fg.mm(id_pred_fg.t())
+            # # 同一个id之间做GCN交互
+            # adj_matrix = (id_labels_fg[:, None] == id_labels_fg[None]).float()
+            # adj_matrix_norm = self.symmetric_normalization(adj_matrix)
+            # id_pred_fg_gcn = self.gcn(id_pred_fg, adj_matrix_norm)
+            # id_pred[id_labels != -2] = id_pred_fg_gcn
+            
         id_pred = F.normalize(id_pred)
         
-        if self.training:
-            id_labels = labels[:, 1]            
-
         if self.norm_type in ['protonorm'] and self.training:
             IoU, top_IoU, bottom_IoU = self.get_iou(bbox_pred, rois, labels, bbox_targets[2])
             person_id = id_labels.clone()
@@ -314,8 +417,8 @@ class DNFNet2Head(nn.Module):
             if self.training:
                 id_pred[id_labels!=-2] = self.normalize(id_pred[id_labels!=-2])
                 id_pred[id_labels==-2] = self.bgnormalize(id_pred[id_labels==-2])
-                id_pred_log_var[id_labels!=-2] = self.normalize_std(id_pred_log_var[id_labels!=-2])
-                id_pred_log_var[id_labels==-2] = self.bgnormalize_std(id_pred_log_var[id_labels==-2])
+                # id_pred_log_var[id_labels!=-2] = self.normalize_std(id_pred_log_var[id_labels!=-2])
+                # id_pred_log_var[id_labels==-2] = self.bgnormalize_std(id_pred_log_var[id_labels==-2])
             else:
                 id_pred = self.normalize(id_pred)
 
@@ -334,7 +437,7 @@ class DNFNet2Head(nn.Module):
                 id_feat = F.normalize(id_feat)
                 part_id_pred.append(id_feat)
             part_id_pred = torch.cat(part_id_pred, dim=1)   # [N, 512]
-        return cls_score, bbox_pred, id_pred, part_id_pred, id_pred_log_var
+        return cls_score, bbox_pred, id_pred, part_id_pred
 
     def _get_target_single_crop(self, pos_bboxes, neg_bboxes, pos_gt_bboxes, 
                            pos_gt_labels, pos_gt_crop_feats, cfg):
@@ -458,6 +561,48 @@ class DNFNet2Head(nn.Module):
                 crop_targets = torch.cat(crop_targets, 0)
         return labels, label_weights, bbox_targets, bbox_weights, bbox_targets_xywh, pos_is_gt_list, crop_targets
 
+    def integrate_context_by_GRU(self, feats, targets, pos_is_gt_list):
+        """
+            每张图片中的样本和gt proposal拉进
+            pos_is_gt_list: gt的用1表示,预测的用0表示,但是预测和哪个gt之间有对应关系不明确
+        """
+        proposals_nums = [len(value) for value in pos_is_gt_list]
+        gt_nums = [torch.sum(value).item() for value in pos_is_gt_list]
+        pred_nums = [proposals_nums[i] - gt_nums[i] for i in range(len(proposals_nums))]
+        cumsum_pro_nums = list(accumulate([0] + proposals_nums))
+
+        fused_pred_feats = []
+        for i in range(1, len(cumsum_pro_nums)):
+            gt_num = gt_nums[i-1]
+            pred_num = pred_nums[i-1]
+            
+            gt_targets = targets[cumsum_pro_nums[i-1]:cumsum_pro_nums[i]][pos_is_gt_list[i-1]==1]
+            pred_targets = targets[cumsum_pro_nums[i-1]:cumsum_pro_nums[i]][pos_is_gt_list[i-1]==0]
+            
+            gt_feats = feats[cumsum_pro_nums[i-1]:cumsum_pro_nums[i]][pos_is_gt_list[i-1]==1]
+            pred_feats = feats[cumsum_pro_nums[i-1]:cumsum_pro_nums[i]][pos_is_gt_list[i-1]==0]
+
+            if gt_num > 0:
+                fused_pred_feats.append(gt_feats)   # 自身作为gt也要加入到list中
+            if pred_num > 0:
+                if gt_num > 0:
+                    pred_gt_matrix = (gt_targets[:, None] == pred_targets[None]).int()
+                    pred_gt_index = pred_gt_matrix.argmax(dim=0)
+                    pred_gt_feats = gt_feats[pred_gt_index]
+                    pred_gt_feats = pred_gt_feats[:, None, :]   # [N, L, D]
+                    pred_feats = pred_feats[:, None, :].transpose(0, 1) # [N, D] -> [N, 1, D] -> [1, N, D]
+                    # GRU融合
+                    output, hn = self.gt_fused_gru(pred_gt_feats, pred_feats)   # inputs, h0
+                    hn = hn.squeeze(0)
+                    fused_pred_feats.append(hn)
+                    
+                else:   # 有预测但是没有gt
+                    fused_pred_feats.append(pred_feats)
+
+        fused_pred_feats = torch.cat(fused_pred_feats, dim=0)
+        assert fused_pred_feats.shape[0] == feats.shape[0]
+        return fused_pred_feats
+
     @force_fp32(apply_to=('cls_score', 'bbox_pred', 'id_pred'))
     def loss(self,
              cls_score,
@@ -552,8 +697,10 @@ class DNFNet2Head(nn.Module):
         
         rid_pred = id_pred[id_labels!=-2]   # [B, 256]
         rid_labels = id_labels[id_labels!=-2]
-        # rid_pred_log_var = id_pred_log_var[id_labels!=-2]
         rpart_feats = part_feats[id_labels!=-2] if part_feats is not None else None
+        
+        # targets = self.loss_reid.get_cluster_ids(rid_labels)
+        # rid_pred = self.integrate_context_by_GRU(rid_pred, targets, pos_is_gt_list)
         
         memory_loss = self.loss_reid(rid_pred, rid_labels, IoU, rpart_feats, top_IoU, bottom_IoU, pos_is_gt_list)
         memory_loss['global_cluster_hard_loss'] *= self.global_weight

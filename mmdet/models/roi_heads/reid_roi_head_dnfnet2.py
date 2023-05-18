@@ -119,6 +119,7 @@ class ReidRoIHeadDNFNet2(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
                         feats=[lvl_feat[i][None] for lvl_feat in x],
                         crop_feats=crop_feats_list[i])
                 else:
+                    # import ipdb;    ipdb.set_trace()
                     sampling_result = self.bbox_sampler.sample(
                         assign_result,
                         proposal_list[i],
@@ -169,10 +170,10 @@ class ReidRoIHeadDNFNet2(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
         else:
             return None
 
-    def _bbox_forward(self, x, rois, labels=None, bbox_targets=None, test=False):
+    def _bbox_forward(self, x, rois, labels=None, bbox_targets=None, pos_is_gt_list=None):
         """Box head forward function used in both training and testing."""
         # x[0]:[1, 1024, 54, 94]
-        # import ipdb;    ipdb.set_trace()
+
         part_feats, RoI_Align_feat = None, None
         bbox_feats = self.bbox_roi_extractor(x[:self.bbox_roi_extractor.num_inputs], rois)   # [N, 1024, 14, 6], [14, 14]表示[height, width]
         if self.use_part_feat:
@@ -181,7 +182,7 @@ class ReidRoIHeadDNFNet2(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
         if self.use_RoI_Align_feat:
             RoI_Align_feat = bbox_feats.detach()    # visualize heat map
 
-        cls_score, bbox_pred, id_pred, part_id_pred, id_pred_log_var = self.bbox_head(bbox_feats, part_feats, labels, rois, bbox_targets) # [N, 256]
+        cls_score, bbox_pred, id_pred, part_id_pred = self.bbox_head(bbox_feats, part_feats, labels, rois, bbox_targets, pos_is_gt_list) # [N, 256]
         bbox_results = dict(cls_score=cls_score, bbox_pred=bbox_pred, bbox_feats=bbox_feats, id_pred=id_pred, \
                             RoI_Align_feat=RoI_Align_feat, part_id_pred=part_id_pred, scene_emb=None, gfn_losses=torch.tensor(0.),
                             id_pred_log_var=None)
@@ -191,21 +192,15 @@ class ReidRoIHeadDNFNet2(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
     def _bbox_forward_train(self, x, sampling_results, gt_bboxes, gt_labels,
                             img_metas, **kwargs):
         """Run forward function and calculate loss for box head in training."""
-        self.sampler_num = [res.pos_bboxes.shape[0] + res.neg_bboxes.shape[0] for res in sampling_results]
+        # self.sampler_num = [res.pos_bboxes.shape[0] + res.neg_bboxes.shape[0] for res in sampling_results]
         rois = bbox2roi([res.bboxes for res in sampling_results])
 
         bbox_targets = self.bbox_head.get_targets(sampling_results, gt_bboxes,
                                                   gt_labels, self.train_cfg, **kwargs)
+        # labels, label_weights, bbox_targets, bbox_weights, bbox_targets_xywh, pos_is_gt_list, crop_targets = bbox_targets
         labels = bbox_targets[0]
-        bbox_results = self._bbox_forward(x, rois, labels, bbox_targets)
-        # if self.use_global_Local_context:
-        #     loss_bbox = self.bbox_head.loss(bbox_results['cls_score_logit'],
-        #                                     bbox_results['bbox_pred'],
-        #                                     bbox_results['id_pred'], 
-        #                                     rois,
-        #                                     *bbox_targets,
-        #                                     **kwargs)
-        # else:
+        pos_is_gt_list = bbox_targets[5]
+        bbox_results = self._bbox_forward(x, rois, labels, bbox_targets, pos_is_gt_list)
         loss_bbox = self.bbox_head.loss(bbox_results['cls_score'],
                                         bbox_results['bbox_pred'],
                                         bbox_results['id_pred'], 
@@ -314,7 +309,7 @@ class ReidRoIHeadDNFNet2(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
             crop_feats = None
 
         rois = bbox2roi(proposals)
-        bbox_results = self._bbox_forward(x, rois, test=True)
+        bbox_results = self._bbox_forward(x, rois)
         img_shapes = tuple(meta['img_shape'] for meta in img_metas)
         scale_factors = tuple(meta['scale_factor'] for meta in img_metas)
 

@@ -140,7 +140,7 @@ class ExtractFeatureHook(Hook):
         prog_bar = mmcv.ProgressBar(len(data_loader))
         for i in range(len(data_loader)):
             if self.cfg.testing:
-                if i > 60:
+                if i > 120:
                     break
             data = next(data_iter)
             gt_bboxes=data['gt_bboxes'][0]._data[0][0]

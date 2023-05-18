@@ -68,7 +68,7 @@ class BaseSampler(metaclass=ABCMeta):
             bboxes = bboxes[None, :]
 
         bboxes = bboxes[:, :4]
-
+        # import ipdb;    ipdb.set_trace()
         gt_flags = bboxes.new_zeros((bboxes.shape[0], ), dtype=torch.uint8)
         if self.add_gt_as_proposals and len(gt_bboxes) > 0:
             if gt_labels is None:
@@ -76,11 +76,8 @@ class BaseSampler(metaclass=ABCMeta):
                     'gt_labels must be given when add_gt_as_proposals is True')
             bboxes = torch.cat([gt_bboxes, bboxes], dim=0)
             assign_result.add_gt_(gt_labels)
-            # print("gt_labels", gt_labels)
-            # print("assign_result", assign_result.gt_inds)
             gt_ones = bboxes.new_ones(gt_bboxes.shape[0], dtype=torch.uint8)
             gt_flags = torch.cat([gt_ones, gt_flags])
-            # print("gt_flags", gt_flags)
 
         num_expected_pos = int(self.num * self.pos_fraction)
         pos_inds = self.pos_sampler._sample_pos(
@@ -101,6 +98,7 @@ class BaseSampler(metaclass=ABCMeta):
 
         crop_feats = kwargs.get('crop_feats', None)
         if crop_feats is None:
+            # import ipdb;    ipdb.set_trace()
             sampling_result = SamplingResult(pos_inds, neg_inds, bboxes, gt_bboxes,
                                             assign_result, gt_flags)
         else:

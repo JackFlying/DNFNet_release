@@ -452,17 +452,19 @@ class HybridMemoryMultiFocalPercentCluster(nn.Module):
         unique_indexes = torch.unique(indexes)
         update_flag = torch.zeros_like(indexes).bool().to(indexes.device)
         iou_target = torch.zeros_like(IoU).long().to(indexes.device)
+
         for i, uid in enumerate(unique_indexes):
             IoU_tmp = IoU.clone()
-            IoU_tmp[indexes!=uid] = -1
-            maxid = torch.argmax(IoU_tmp)
+            IoU_tmp[indexes != uid] = -1
+            maxid = torch.argmax(IoU_tmp)   # 实际上选择的是gt,相当于每次用gt去更新
             update_flag[maxid] = True
             iou_target[indexes==uid] = maxid
         return update_flag, iou_target
 
-    def get_m2o_loss(self, feats, targets, pos_is_gt_list):
+    def get_m2o_loss(self, feats, targets, pos_is_gt_list, IoU):
         """
             每张图片中的样本和gt proposal拉进
+            pos_is_gt_list: gt的用1表示,预测的用0表示，但是预测和哪个gt之间有对应关系不明确
         """
         proposals_nums = [len(value) for value in pos_is_gt_list]
         gt_nums = [torch.sum(value).item() for value in pos_is_gt_list]
@@ -496,6 +498,7 @@ class HybridMemoryMultiFocalPercentCluster(nn.Module):
         """
 
         feats = F.normalize(feats, p=2, dim=1)
+        
         update_flag, iou_target = self.get_update_flag(indexes, IoU)
         top_update_flag, top_iou_target = self.get_update_flag(indexes, top_IoU)
         bottom_update_flag, bottom_iou_target = self.get_update_flag(indexes, bottom_IoU)
