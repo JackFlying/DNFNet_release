@@ -19,12 +19,11 @@ def get_weighted_mean(memory_features): # 只能求一个簇
     return weighted_mean
 
 def get_uncertainty_by_centroid(labels, features, logger):
-    T = 4
     labels = torch.tensor(labels[0])
     features = torch.tensor(features[0])
     new_labels = labels
     last_uncertainty_num = 0
-    for _ in range(10):
+    for t in range(10):
         labels = new_labels
         unique_labels = torch.unique(labels)
         centroid = []
@@ -37,13 +36,13 @@ def get_uncertainty_by_centroid(labels, features, logger):
         uncertainty = (argmax == labels)
         new_labels = transfer_label_noise_to_outlier(uncertainty, argmax.tolist())[0]
         new_labels = torch.tensor(new_labels)
-        logger.info(f"{T}: uncertainty sample number: " + str(len(uncertainty[uncertainty == False])))
-        logger.info(f"{T}: certainty sample number: " + str(len(uncertainty[uncertainty == True])))
+        logger.info(f"{t}: uncertainty sample number: " + str(len(uncertainty[uncertainty == False])))
+        logger.info(f"{t}: certainty sample number: " + str(len(uncertainty[uncertainty == True])))
         if last_uncertainty_num == len(uncertainty[uncertainty == False]):
             break
         else:
             last_uncertainty_num = len(uncertainty[uncertainty == False])
-            
+    torch.save(uncertainty, os.path.join("saved_file", "uncertainty.pth"))
     # import ipdb;    ipdb.set_trace()
     # centroid = generate_cluster_features(labels[0], features[0])
     # labels = torch.tensor(labels[0])
@@ -54,7 +53,7 @@ def get_uncertainty_by_centroid(labels, features, logger):
 
     # logger.info("uncertainty sample number: " + str(len(uncertainty[uncertainty == False])))
     # logger.info("certainty sample number: " + str(len(uncertainty[uncertainty == True])))
-    return uncertainty, argmax
+    return new_labels
 
 def get_weight_by_uncertainty(uncertainty, labels):
     labels = torch.tensor(labels)

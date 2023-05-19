@@ -90,11 +90,8 @@ class ClusterHook(Hook):
                     image_inds=runner.model.module.roi_head.bbox_head.loss_reid.idx[:len(memory_features[0])].clone().cpu(),
                     cfg=self.cfg
                 )
-                uncertainty, new_labels = get_uncertainty_by_centroid(pseudo_labels, memory_features, self.logger)
-                # pseudo_labels = reassignment_labels(new_labels.tolist())
-                # pseudo_labels = [pseudo_labels]
-                torch.save(uncertainty, os.path.join("saved_file", "uncertainty.pth"))
-                pseudo_labels = transfer_label_noise_to_outlier(uncertainty, pseudo_labels[0])
+                pseudo_labels = get_uncertainty_by_centroid(pseudo_labels, memory_features, self.logger)
+                pseudo_labels = [pseudo_labels]
                 # TODO 根据距离聚类中心的距离求置信度
             else:
                 self.cfg.PSEUDO_LABELS.part_feat.use_part_feat = True   # 为了防止新的epoch自动变成0
