@@ -94,7 +94,7 @@ class ClusterHook(Hook):
                 # pseudo_labels = reassignment_labels(new_labels.tolist())
                 # pseudo_labels = [pseudo_labels]
                 torch.save(uncertainty, os.path.join("saved_file", "uncertainty.pth"))
-                # pseudo_labels = transfer_label_noise_to_outlier(uncertainty, pseudo_labels[0])
+                pseudo_labels = transfer_label_noise_to_outlier(uncertainty, pseudo_labels[0])
                 # TODO 根据距离聚类中心的距离求置信度
             else:
                 self.cfg.PSEUDO_LABELS.part_feat.use_part_feat = True   # 为了防止新的epoch自动变成0

@@ -6,18 +6,54 @@ import collections
 import os
 
 
+def get_weighted_mean(memory_features): # 只能求一个簇
+    """
+        距离聚类中心越近，权重越高
+        memory_features: [K, D]
+    """
+    mean = torch.mean(memory_features, dim=0)
+    # return mean
+    cos_sim = 1 - memory_features.mm(mean[None].t())    # 余弦相似度越小,越相似
+    cos_sim_sf = F.softmax(cos_sim / 0.1, dim=0)
+    weighted_mean = torch.sum(memory_features * cos_sim_sf, dim=0)
+    return weighted_mean
+
 def get_uncertainty_by_centroid(labels, features, logger):
-    # TODO For循环，每次更新聚类中心
-    
-    centroid = generate_cluster_features(labels[0], features[0])
+    T = 4
     labels = torch.tensor(labels[0])
-    features = features[0]
-    sim = features.mm(centroid.t())
-    argmax = sim.argmax(dim=-1)
-    uncertainty = (argmax == labels)
-    
-    logger.info("uncertainty sample number: " + str(len(uncertainty[uncertainty == False])))
-    logger.info("certainty sample number: " + str(len(uncertainty[uncertainty == True])))
+    features = torch.tensor(features[0])
+    new_labels = labels
+    last_uncertainty_num = 0
+    for _ in range(10):
+        labels = new_labels
+        unique_labels = torch.unique(labels)
+        centroid = []
+        for ul in unique_labels:
+            mean = get_weighted_mean(features[labels == ul])
+            centroid.append(mean)
+        centroid = torch.stack(centroid)
+        sim = features.mm(centroid.t())
+        argmax = sim.argmax(dim=-1)
+        uncertainty = (argmax == labels)
+        new_labels = transfer_label_noise_to_outlier(uncertainty, argmax.tolist())[0]
+        new_labels = torch.tensor(new_labels)
+        logger.info(f"{T}: uncertainty sample number: " + str(len(uncertainty[uncertainty == False])))
+        logger.info(f"{T}: certainty sample number: " + str(len(uncertainty[uncertainty == True])))
+        if last_uncertainty_num == len(uncertainty[uncertainty == False]):
+            break
+        else:
+            last_uncertainty_num = len(uncertainty[uncertainty == False])
+            
+    # import ipdb;    ipdb.set_trace()
+    # centroid = generate_cluster_features(labels[0], features[0])
+    # labels = torch.tensor(labels[0])
+    # features = features[0]
+    # sim = features.mm(centroid.t())
+    # argmax = sim.argmax(dim=-1)
+    # uncertainty = (argmax == labels)
+
+    # logger.info("uncertainty sample number: " + str(len(uncertainty[uncertainty == False])))
+    # logger.info("certainty sample number: " + str(len(uncertainty[uncertainty == True])))
     return uncertainty, argmax
 
 def get_weight_by_uncertainty(uncertainty, labels):
