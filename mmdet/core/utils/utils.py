@@ -7,6 +7,8 @@ import os
 
 
 def get_uncertainty_by_centroid(labels, features, logger):
+    # TODO For循环，每次更新聚类中心
+    
     centroid = generate_cluster_features(labels[0], features[0])
     labels = torch.tensor(labels[0])
     features = features[0]
@@ -14,15 +16,9 @@ def get_uncertainty_by_centroid(labels, features, logger):
     argmax = sim.argmax(dim=-1)
     uncertainty = (argmax == labels)
     
-    # TODO 重新分配标签到最近的簇
-    # import ipdb;    ipdb.set_trace()
-    # new_labels = labels.clone()
-    # new_labels[argmax != labels] = argmax[argmax != labels]
-    
     logger.info("uncertainty sample number: " + str(len(uncertainty[uncertainty == False])))
     logger.info("certainty sample number: " + str(len(uncertainty[uncertainty == True])))
     return uncertainty, argmax
-
 
 def get_weight_by_uncertainty(uncertainty, labels):
     labels = torch.tensor(labels)
@@ -60,7 +56,6 @@ def GMM(memory_features, memory_features_std, memory_labels):
     means = torch.stack(means, dim=0)
     stds = torch.stack(stds, dim=0)
     return means, stds
-
 
 def get_softlabel_by_part(pseudo_labels, pseudo_label2s, memory_features):
 
@@ -353,7 +348,6 @@ def re_ranking_for_instance(labels, memory_features, k1):
     m = rank_k_matrix.bool() & cluster_matrix.bool()
     uncertainty = m.sum(dim=-1) / torch.maximum(torch.tensor(1), torch.minimum(rank_k_matrix.sum(-1), cluster_matrix.sum(-1)))
     return uncertainty
-
 
 @torch.no_grad()
 def compute_label_transform_matrix(labels_t1, labels_t2):

@@ -68,7 +68,6 @@ class BaseSampler(metaclass=ABCMeta):
             bboxes = bboxes[None, :]
 
         bboxes = bboxes[:, :4]
-        # import ipdb;    ipdb.set_trace()
         gt_flags = bboxes.new_zeros((bboxes.shape[0], ), dtype=torch.uint8)
         if self.add_gt_as_proposals and len(gt_bboxes) > 0:
             if gt_labels is None:
@@ -98,10 +97,10 @@ class BaseSampler(metaclass=ABCMeta):
 
         crop_feats = kwargs.get('crop_feats', None)
         if crop_feats is None:
-            # import ipdb;    ipdb.set_trace()
             sampling_result = SamplingResult(pos_inds, neg_inds, bboxes, gt_bboxes,
                                             assign_result, gt_flags)
         else:
             sampling_result = SamplingResult(pos_inds, neg_inds, bboxes, gt_bboxes,
                                             assign_result, gt_flags, crop_feats)
+
         return sampling_result

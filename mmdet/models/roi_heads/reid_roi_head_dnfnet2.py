@@ -119,7 +119,7 @@ class ReidRoIHeadDNFNet2(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
                         feats=[lvl_feat[i][None] for lvl_feat in x],
                         crop_feats=crop_feats_list[i])
                 else:
-                    # import ipdb;    ipdb.set_trace()
+
                     sampling_result = self.bbox_sampler.sample(
                         assign_result,
                         proposal_list[i],
