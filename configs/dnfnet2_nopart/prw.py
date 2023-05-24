@@ -3,7 +3,7 @@ _base_ = [
     '../_base_/datasets/coco_reid_unsup_prw.py',
     '../_base_/schedules/schedule_1x_reid_norm_base.py', '../_base_/default_runtime.py'
 ]
-TEST = True
+TEST = False
 USE_PART_FEAT = False
 GLOBAL_WEIGHT = 0.9
 CO_LEARNING = False
@@ -49,7 +49,7 @@ model = dict(
             type='DNFNet2Head',
             id_num=18048,
             rcnn_bbox_bn=True,
-            cluster_top_percent=0.6,
+            cluster_top_percent=0.6,    # defalut: 0.6
             instance_top_percent=1.0,
             use_quaduplet_loss=True,
             use_cluster_hard_loss=True,
@@ -222,6 +222,7 @@ PSEUDO_LABELS = dict(
                     refine_global_weight=0.5
                     ),
     K=10,
+    T=1,
 )
 # fp16 = dict(loss_scale=512.)
 workflow = [('train', 1)]

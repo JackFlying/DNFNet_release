@@ -10,7 +10,7 @@ from mmdet.core import (auto_fp16, build_bbox_coder, force_fp32, multi_apply,
                         multiclass_nms, multiclass_nms_aug)
 from mmdet.models.builder import HEADS, build_loss
 from mmdet.models.losses import accuracy
-from mmdet.models.utils import  Quaduplet2Loss, MemoryQuaduplet2Loss, HybridMemoryMultiFocalPercentCluster, HybridMemoryMultiFocalPercentDnfnet
+from mmdet.models.utils import  Quaduplet2Loss, MemoryQuaduplet2Loss, HybridMemoryMultiFocalPercentCluster, HybridMemoryMultiFocalPercentDnfnet, HybridMemoryMultiFocalPercentClusterUnlabeled
 from .gfn import GalleryFilterNetwork
 from mmdet.models.utils.ProtoNorm import PrototypeNorm1d, register_targets_for_pn, convert_bn_to_pn
 import os
@@ -172,7 +172,7 @@ class DNFNet2Head(nn.Module):
         self.bbox_coder = build_bbox_coder(bbox_coder)
         self.loss_cls = build_loss(loss_cls)
         self.loss_bbox = build_loss(loss_bbox)
-        self.loss_reid = HybridMemoryMultiFocalPercentCluster(num_features, id_num, temp=temperature, momentum=momentum, testing=testing, cluster_top_percent=cluster_top_percent, \
+        self.loss_reid = HybridMemoryMultiFocalPercentClusterUnlabeled(num_features, id_num, temp=temperature, momentum=momentum, testing=testing, cluster_top_percent=cluster_top_percent, \
                                                         instance_top_percent=instance_top_percent, use_cluster_hard_loss=use_cluster_hard_loss,
                                                         use_instance_hard_loss=use_instance_hard_loss, use_hybrid_loss=use_hybrid_loss, use_IoU_loss=use_IoU_loss, \
                                                         use_IoU_memory=use_IoU_memory, IoU_loss_clip=IoU_loss_clip, IoU_memory_clip=IoU_memory_clip, \
@@ -274,10 +274,10 @@ class DNFNet2Head(nn.Module):
             self.normalize_std = nn.BatchNorm1d(num_features=self.reid_feat_dim, affine=self.use_bn_affine)
             self.bgnormalize_std = nn.BatchNorm1d(num_features=self.reid_feat_dim, affine=self.use_bn_affine)
         self.proposal_score_max = False
-        self.gt_fused_gru = nn.GRU(input_size=self.reid_feat_dim, hidden_size=self.reid_feat_dim, batch_first=True)
+        # self.gt_fused_gru = nn.GRU(input_size=self.reid_feat_dim, hidden_size=self.reid_feat_dim, batch_first=True)
         
-        self.se = SEBlock(in_channels * 2, reduction=16)
-        self.mha = MultiHeadCrossAttention(input_dim=self.reid_feat_dim, num_heads=4)
+        # self.se = SEBlock(in_channels * 2, reduction=16)
+        # self.mha = MultiHeadCrossAttention(input_dim=self.reid_feat_dim, num_heads=4)
         
         # self.fc1 = nn.Linear(self.reid_feat_dim, self.reid_feat_dim)
         # self.fc2 = nn.Linear(self.reid_feat_dim, self.reid_feat_dim)
@@ -647,16 +647,16 @@ class DNFNet2Head(nn.Module):
                     pred_gt_feats = gt_feats[pred_gt_index]
 
                     # 1. GRU融合
-                    # pred_gt_feats = pred_gt_feats[:, None, :]   # [N, L, D]
-                    # pred_feats = pred_feats[:, None, :].transpose(0, 1) # [N, D] -> [N, 1, D] -> [1, N, D]
-                    # output, hn = self.gt_fused_gru(pred_gt_feats, pred_feats)   # inputs, h0
-                    # update_pred_feats = hn.squeeze(0)
+                    pred_gt_feats = pred_gt_feats[:, None, :]   # [N, L, D]
+                    pred_feats = pred_feats[:, None, :].transpose(0, 1) # [N, D] -> [N, 1, D] -> [1, N, D]
+                    output, hn = self.gt_fused_gru(pred_gt_feats, pred_feats)   # inputs, h0
+                    update_pred_feats = hn.squeeze(0)
                     
                     # 2. attention融合
-                    pred_gt_feats = pred_gt_feats[:, None, :]   # [N, 1, D]
-                    pred_feats = pred_feats[:, None, :]
-                    update_pred_feats = self.mha(pred_feats, pred_gt_feats, pred_gt_feats)
-                    update_pred_feats = update_pred_feats.squeeze(1)
+                    # pred_gt_feats = pred_gt_feats[:, None, :]   # [N, 1, D]
+                    # pred_feats = pred_feats[:, None, :]
+                    # update_pred_feats = self.mha(pred_feats, pred_gt_feats, pred_gt_feats)
+                    # update_pred_feats = update_pred_feats.squeeze(1)
                     
                     fused_pred_feats.append(update_pred_feats)
                     
@@ -666,7 +666,6 @@ class DNFNet2Head(nn.Module):
         fused_pred_feats = torch.cat(fused_pred_feats, dim=0)
         assert fused_pred_feats.shape[0] == feats.shape[0]
         return fused_pred_feats
-
 
     @force_fp32(apply_to=('cls_score', 'bbox_pred', 'id_pred'))
     def loss(self,
@@ -764,8 +763,8 @@ class DNFNet2Head(nn.Module):
         rid_labels = id_labels[id_labels!=-2]
         rpart_feats = part_feats[id_labels!=-2] if part_feats is not None else None
         
-        targets = self.loss_reid.get_cluster_ids(rid_labels)
-        rid_pred = self.integrate_gt_context(rid_pred, targets, pos_is_gt_list)
+        # targets = self.loss_reid.get_cluster_ids(rid_labels)
+        # rid_pred = self.integrate_gt_context(rid_pred, targets, pos_is_gt_list)
         
         memory_loss = self.loss_reid(rid_pred, rid_labels, IoU, rpart_feats, top_IoU, bottom_IoU, pos_is_gt_list)
         memory_loss['global_cluster_hard_loss'] *= self.global_weight

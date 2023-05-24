@@ -207,12 +207,11 @@ class HM(autograd.Function):
             elif ctx.update_method == "iou":
                 ctx.features[y] = (1 - iou) * ctx.features[y] + iou * x
             elif ctx.update_method == "max_iou":
-                if uf: 
+                if uf:
                     ctx.features[y] = x  # memory还是用特征均值更新
             # ctx.features[y] /= ctx.features[y].norm()
             # ctx.cluster_mean[tg], ctx.cluster_std[tg] = get_mean_conv(ctx.features[ctx.labels == tg])
             # ctx.cluster_mean[tg], _ = get_mean_conv(ctx.features[ctx.labels == tg])
-            
             ctx.cluster_mean[tg] = get_weighted_mean(ctx.features[ctx.labels == tg])
 
         return grad_inputs, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None
@@ -237,13 +236,13 @@ def hm(inputs, indexes, labels, features, cluster_mean, IoU, update_method=None,
             torch.Tensor(IoU_memory_clip).to(inputs.device), targets
     )
 
-class HybridMemoryMultiFocalPercentCluster(nn.Module):
+class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
 
     def __init__(self, num_features, num_memory, temp=0.05, momentum=0.2, cluster_top_percent=0.1, instance_top_percent=1, \
                     use_cluster_hard_loss=True, use_instance_hard_loss=False, use_hybrid_loss=False, testing=False, use_uncertainty_loss=False,
                     use_IoU_loss=False, use_IoU_memory=False, IoU_loss_clip=[0.7, 1.0], IoU_memory_clip=[0.2, 0.9], IoU_momentum=0.2,
                     use_part_feat=False, co_learning=False, use_hard_mining=False, use_max_IoU_bbox=False, update_method=None):
-        super(HybridMemoryMultiFocalPercentCluster, self).__init__()
+        super(HybridMemoryMultiFocalPercentClusterUnlabeled, self).__init__()
         self.use_cluster_hard_loss = use_cluster_hard_loss
         self.use_instance_hard_loss = use_instance_hard_loss
         self.use_hybrid_loss = use_hybrid_loss
@@ -358,7 +357,6 @@ class HybridMemoryMultiFocalPercentCluster(nn.Module):
         ori_neg_exps = neg_exps
 
         neg_exps = neg_exps / neg_exps.sum(dim=1, keepdim=True) # 难样本归一化
-
         new_exps = masked_exps.new_zeros(size=exps.shape)
         new_exps[one_hot_pos>0] = masked_exps[one_hot_pos>0]
     
@@ -366,6 +364,7 @@ class HybridMemoryMultiFocalPercentCluster(nn.Module):
         sorted_cum_sum = torch.cumsum(sorted, dim=1)
         sorted_cum_diff = (sorted_cum_sum - self.cluster_top_percent).abs()
         sorted_cum_min_indices = sorted_cum_diff.argmin(dim=1)  # 获得K的大小
+            
         min_values = sorted[torch.range(0, sorted.shape[0]-1).long(), sorted_cum_min_indices]   # 获取K对应的val
         min_values = min_values.unsqueeze(dim=-1) * ori_neg_exps.sum(dim=1, keepdim=True)   # 前面除neg_exps.sum(),所以这里乘回去
         ori_neg_exps[ori_neg_exps<min_values] = 0   # 小于阈值,即难度稍微小的负样本不考虑
@@ -375,13 +374,19 @@ class HybridMemoryMultiFocalPercentCluster(nn.Module):
         masked_sums = masked_exps.sum(dim, keepdim=True) + epsilon
         return masked_exps / masked_sums    # softmax
 
-    def get_hard_cluster_loss_cluster(self, labels, sim, targets, IoU, indexes):
+    def get_hard_cluster_loss_cluster(self, labels, sim, targets, indexes):
         """
             :sim: [B, C]
             :targets: [B]
             :labels: [N]
             :IoU: [N]
         """
+        # 1. 对训练样本的选择
+        # sample_outlier = torch.load(os.path.join('saved_file', 'sample_outlier.pth')).cuda()    # [N]
+        # batch_outlier = sample_outlier[indexes]
+        # sim = sim[batch_outlier == False]
+        # targets = targets[batch_outlier == False]
+        
         B = sim.shape[0]
         self.num_memory = labels.shape[0]
         nums = torch.zeros(labels.max() + 1, 1).float().cuda() # many instances belong to a cluster, so calculate the number of instances in a cluster
@@ -389,12 +394,10 @@ class HybridMemoryMultiFocalPercentCluster(nn.Module):
         mask = (nums > 0).float()
         sim = sim.t()
 
-        is_outlier = torch.load(os.path.join('saved_file', 'is_outlier.pth')).cuda()    # [N]
-        # TODO 记录那一个cluster是unlabeled
-        # import ipdb;    ipdb.set_trace()
-        # labeled
-        # sim = sim[is_outlier]
-        # mask = mask[is_outlier]
+        # 2. 对正负样本的选择
+        # cluster_outlier = torch.load(os.path.join('saved_file', 'cluster_outlier.pth')).cuda()    # [N]
+        # sim = sim[cluster_outlier == False]
+        # mask = mask[cluster_outlier == False]
         
         mask = mask.expand_as(sim)
         masked_sim = self.masked_softmax_multi_focal(sim.t().contiguous(), mask.t().contiguous(), targets=targets) # sim: u * B, mask:u * B, masked_sim: B * u
@@ -532,11 +535,16 @@ class HybridMemoryMultiFocalPercentCluster(nn.Module):
             global_targets, bottom_targets, top_targets = targets.clone(), targets.clone(), targets.clone()
             global_indexes, bottom_indexes, top_indexes = indexes.clone(), indexes.clone(), indexes.clone()
         
+        
+        # sample_outlier = torch.load(os.path.join('saved_file', 'sample_outlier.pth')).cuda()    # [N]
+        # batch_outlier = sample_outlier[indexes]
+        # inputs = inputs[batch_outlier == False]
+        # targets = targets[batch_outlier == False]
         if self.use_cluster_hard_loss:
             losses["global_cluster_hard_loss"] = torch.tensor(0.)
             losses["part_cluster_hard_loss"] = torch.tensor(0.)
-            if targets.shape[0] > 0:
-                losses["global_cluster_hard_loss"] = self.get_hard_cluster_loss_cluster(labels.clone(), inputs, global_targets, IoU, global_indexes)
+            if global_targets.shape[0] > 0:
+                losses["global_cluster_hard_loss"] = self.get_hard_cluster_loss_cluster(labels.clone(), inputs, global_targets, indexes)
  
                 if self.use_part_feat:
                     bottom_cluster_hard_loss = self.get_hard_cluster_loss(labels.clone(), bottom_inputs, bottom_targets, bottom_IoU, bottom_indexes, bottom_feats)

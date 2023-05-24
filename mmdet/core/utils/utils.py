@@ -5,6 +5,40 @@ import numpy as np
 import collections
 import os
 
+def get_outlier(labels):
+    """
+        将outlier的标签设置为-1
+        # 其它设置为连续的标签
+    """
+    labels = labels[0]
+    labels_num = collections.defaultdict(int)
+    for label in labels:
+        labels_num[label] += 1
+    # sample_outlier
+    sample_outlier = torch.zeros(len(labels)).bool()
+    for i, label in enumerate(labels):
+        if labels_num[label] == 1:
+            sample_outlier[i] = True
+        else:
+            sample_outlier[i] = False
+    new_labels = torch.tensor(labels).long()
+    # 如果把异常点的label设置为-1, 不容易update
+    new_labels[sample_outlier == False] = torch.tensor(reassignment_labels(new_labels[sample_outlier == False].tolist())).long()
+    new_labels[sample_outlier == True] = torch.tensor(reassignment_labels(new_labels[sample_outlier == True].tolist())).long()
+    new_labels[sample_outlier == True] += new_labels[sample_outlier == False].max() + 1 # 异常点编号在labeled之后
+
+    # cluster outlier
+    cluster_outlier = torch.zeros(new_labels.max() + 1).bool()
+    for lb, lb_num in labels_num.items():
+        if(lb_num == 1):
+            cluster_outlier[lb] = True
+        else:
+            cluster_outlier[lb] = False
+
+    torch.save(sample_outlier, os.path.join("saved_file", "sample_outlier.pth"))
+    torch.save(cluster_outlier, os.path.join("saved_file", "cluster_outlier.pth"))
+    new_labels = new_labels.tolist()
+    return [new_labels]
 
 def get_weighted_mean(memory_features): # 只能求一个簇
     """
@@ -12,18 +46,18 @@ def get_weighted_mean(memory_features): # 只能求一个簇
         memory_features: [K, D]
     """
     mean = torch.mean(memory_features, dim=0)
-    # return mean
+    return mean
     cos_sim = 1 - memory_features.mm(mean[None].t())    # 余弦相似度越小,越相似
     cos_sim_sf = F.softmax(cos_sim / 0.1, dim=0)
     weighted_mean = torch.sum(memory_features * cos_sim_sf, dim=0)
     return weighted_mean
 
-def get_uncertainty_by_centroid(labels, features, logger):
+def get_uncertainty_by_centroid(labels, features, logger, T):
     labels = torch.tensor(labels[0])
     features = torch.tensor(features[0])
     new_labels = labels
     last_uncertainty_num = 0
-    for t in range(10):
+    for t in range(T):
         labels = new_labels
         unique_labels = torch.unique(labels)
         centroid = []
@@ -43,6 +77,7 @@ def get_uncertainty_by_centroid(labels, features, logger):
         else:
             last_uncertainty_num = len(uncertainty[uncertainty == False])
     torch.save(uncertainty, os.path.join("saved_file", "uncertainty.pth"))
+    
     # import ipdb;    ipdb.set_trace()
     # centroid = generate_cluster_features(labels[0], features[0])
     # labels = torch.tensor(labels[0])
@@ -50,9 +85,12 @@ def get_uncertainty_by_centroid(labels, features, logger):
     # sim = features.mm(centroid.t())
     # argmax = sim.argmax(dim=-1)
     # uncertainty = (argmax == labels)
+    # new_labels = transfer_label_noise_to_outlier(uncertainty, argmax.tolist())[0]
+    # new_labels = torch.tensor(new_labels)
 
     # logger.info("uncertainty sample number: " + str(len(uncertainty[uncertainty == False])))
     # logger.info("certainty sample number: " + str(len(uncertainty[uncertainty == True])))
+    
     return new_labels
 
 def get_weight_by_uncertainty(uncertainty, labels):
