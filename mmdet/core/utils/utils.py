@@ -28,6 +28,10 @@ def get_outlier(labels):
     new_labels[sample_outlier == True] += new_labels[sample_outlier == False].max() + 1 # 异常点编号在labeled之后
 
     # cluster outlier
+    labels_num = collections.defaultdict(int)
+    for label in new_labels:
+        labels_num[label.item()] += 1
+    
     cluster_outlier = torch.zeros(new_labels.max() + 1).bool()
     for lb, lb_num in labels_num.items():
         if(lb_num == 1):

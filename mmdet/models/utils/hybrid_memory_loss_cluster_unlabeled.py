@@ -264,6 +264,7 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
         self.temp = temp
 
         #for mutli focal
+        self.positive_top_percent = 0.1    # 数值越大，难样本比例越大
         self.cluster_top_percent = cluster_top_percent
         self.instance_top_percent = instance_top_percent
         self.co_learning = co_learning
@@ -338,6 +339,7 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
     def get_all_cluster_ids(self):
         return self.labels.clone()
 
+
     def masked_softmax_multi_focal(self, vec, mask, dim=1, targets=None, epsilon=1e-6):
         """
             :vec: [B, u], 与聚类中心的相似度
@@ -351,6 +353,7 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
         one_hot_neg = one_hot_pos.new_ones(size=one_hot_pos.shape)  # 返回一个与size大小相同的用1填充的张量
         one_hot_neg = one_hot_neg - one_hot_pos
         masked_exps = exps * mask.float().clone()
+        
         # 难样本挖掘
         neg_exps = exps.new_zeros(size=exps.shape)
         neg_exps[one_hot_neg>0] = masked_exps[one_hot_neg>0]
@@ -364,7 +367,7 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
         sorted_cum_sum = torch.cumsum(sorted, dim=1)
         sorted_cum_diff = (sorted_cum_sum - self.cluster_top_percent).abs()
         sorted_cum_min_indices = sorted_cum_diff.argmin(dim=1)  # 获得K的大小
-            
+        
         min_values = sorted[torch.range(0, sorted.shape[0]-1).long(), sorted_cum_min_indices]   # 获取K对应的val
         min_values = min_values.unsqueeze(dim=-1) * ori_neg_exps.sum(dim=1, keepdim=True)   # 前面除neg_exps.sum(),所以这里乘回去
         ori_neg_exps[ori_neg_exps<min_values] = 0   # 小于阈值,即难度稍微小的负样本不考虑
@@ -374,19 +377,13 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
         masked_sums = masked_exps.sum(dim, keepdim=True) + epsilon
         return masked_exps / masked_sums    # softmax
 
-    def get_hard_cluster_loss_cluster(self, labels, sim, targets, indexes):
+    def get_hard_cluster_loss_cluster_label(self, labels, sim, targets):
         """
             :sim: [B, C]
             :targets: [B]
             :labels: [N]
             :IoU: [N]
         """
-        # 1. 对训练样本的选择
-        # sample_outlier = torch.load(os.path.join('saved_file', 'sample_outlier.pth')).cuda()    # [N]
-        # batch_outlier = sample_outlier[indexes]
-        # sim = sim[batch_outlier == False]
-        # targets = targets[batch_outlier == False]
-        
         B = sim.shape[0]
         self.num_memory = labels.shape[0]
         nums = torch.zeros(labels.max() + 1, 1).float().cuda() # many instances belong to a cluster, so calculate the number of instances in a cluster
@@ -394,7 +391,7 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
         mask = (nums > 0).float()
         sim = sim.t()
 
-        # 2. 对正负样本的选择
+        # # 对正负样本的选择
         # cluster_outlier = torch.load(os.path.join('saved_file', 'cluster_outlier.pth')).cuda()    # [N]
         # sim = sim[cluster_outlier == False]
         # mask = mask[cluster_outlier == False]
@@ -402,6 +399,83 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
         mask = mask.expand_as(sim)
         masked_sim = self.masked_softmax_multi_focal(sim.t().contiguous(), mask.t().contiguous(), targets=targets) # sim: u * B, mask:u * B, masked_sim: B * u
         cluster_hard_loss = F.nll_loss(torch.log(masked_sim + 1e-6), targets, reduce=False)
+        cluster_hard_loss = cluster_hard_loss.mean()
+        
+        return cluster_hard_loss
+
+
+    def masked_softmax_multi_focal_unlabel(self, vec, mask, dim=1, targets=None, epsilon=1e-6):
+        """
+            :vec: [B, u], 与聚类中心的相似度
+            :mask: [B, u], 某些簇的数量为0
+            :targets: [B, 1]
+            :labels: [N, ]
+        """
+        exps = torch.exp(vec)   # [B, u]
+        
+        one_hot_pos = torch.nn.functional.one_hot(targets, num_classes=exps.shape[1])
+        one_hot_neg = one_hot_pos.new_ones(size=one_hot_pos.shape)  # 返回一个与size大小相同的用1填充的张量
+        one_hot_neg = one_hot_neg - one_hot_pos
+        masked_exps = exps * mask.float().clone()
+        # 难样本挖掘
+
+        neg_exps = exps.new_zeros(size=exps.shape)
+        neg_exps[one_hot_neg>0] = masked_exps[one_hot_neg>0]
+        ori_neg_exps = neg_exps.clone()
+        ori_pos_exps = neg_exps.clone()
+
+        neg_exps = neg_exps / neg_exps.sum(dim=1, keepdim=True) # 难样本归一化
+        new_exps = masked_exps.new_zeros(size=exps.shape)
+        new_exps[one_hot_pos>0] = masked_exps[one_hot_pos>0]
+    
+        sorted, indices = torch.sort(neg_exps, dim=1, descending=True)  # 排序得到相似度最大(难度最大)的负样本
+        sorted_cum_sum = torch.cumsum(sorted, dim=1)
+        
+        # 获取positive index
+        sorted_cum_diff_pos = (sorted_cum_sum - self.positive_top_percent).abs()
+        sorted_cum_min_indices_pos = sorted_cum_diff_pos.argmin(dim=1)  # 获得K的大小
+        pos_min_values = sorted[torch.range(0, sorted.shape[0]-1).long(), sorted_cum_min_indices_pos]   # 获取K对应的val
+        pos_min_values = pos_min_values.unsqueeze(dim=-1) * ori_pos_exps.sum(dim=1, keepdim=True)   # 前面除neg_exps.sum(),所以这里乘回去
+        one_hot_pos[ori_pos_exps > pos_min_values] = 1
+        
+        # 获取hard negative
+        sorted_cum_diff = (sorted_cum_sum - self.cluster_top_percent).abs()
+        sorted_cum_min_indices = sorted_cum_diff.argmin(dim=1)  # 获得K的大小    
+        min_values = sorted[torch.range(0, sorted.shape[0]-1).long(), sorted_cum_min_indices]   # 获取K对应的val
+        min_values = min_values.unsqueeze(dim=-1) * ori_neg_exps.sum(dim=1, keepdim=True)   # 前面除neg_exps.sum(),所以这里乘回去
+        ori_neg_exps[ori_neg_exps < min_values] = 0   # 相似度低于阈值, 即难度稍微小的负样本不考虑
+        ori_neg_exps[ori_neg_exps > pos_min_values] = 0
+        
+        new_exps[one_hot_neg>0] = ori_neg_exps[one_hot_neg>0]   # 做分母
+        masked_exps = new_exps
+        masked_sums = masked_exps.sum(dim, keepdim=True) + epsilon
+        
+        return masked_exps / masked_sums, one_hot_pos    # softmax
+
+    def get_hard_cluster_loss_cluster_unlabel(self, labels, sim, targets):
+        """
+            :sim: [B, C]
+            :targets: [B]
+            :labels: [N]
+            :IoU: [N]
+        """
+        B = sim.shape[0]
+        self.num_memory = labels.shape[0]
+        nums = torch.zeros(labels.max() + 1, 1).float().cuda() # many instances belong to a cluster, so calculate the number of instances in a cluster
+        nums.index_add_(0, labels, torch.ones(self.num_memory, 1).float().cuda()) # [C], 求每一个簇样本个数
+        mask = (nums > 0).float()
+        sim = sim.t()
+
+        cluster_outlier = torch.load(os.path.join('saved_file', 'cluster_outlier.pth')).cuda()    # [N]
+        sim = sim[cluster_outlier == True]
+        mask = mask[cluster_outlier == True]
+        
+        mask = mask.expand_as(sim)
+        masked_sim, one_hot_pos = self.masked_softmax_multi_focal_unlabel(sim.t().contiguous(), mask.t().contiguous(), targets=targets) # sim: u * B, mask:u * B, masked_sim: B * u
+        # import ipdb;    ipdb.set_trace()
+        
+        cluster_hard_loss = ((-torch.log(masked_sim + 1e-6)) * one_hot_pos).sum(-1) / one_hot_pos.sum(-1)
+        # cluster_hard_loss = F.nll_loss(torch.log(masked_sim + 1e-6), targets, reduce=False)
         cluster_hard_loss = cluster_hard_loss.mean()
         
         return cluster_hard_loss
@@ -535,20 +609,23 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
             global_targets, bottom_targets, top_targets = targets.clone(), targets.clone(), targets.clone()
             global_indexes, bottom_indexes, top_indexes = indexes.clone(), indexes.clone(), indexes.clone()
         
-        
-        # sample_outlier = torch.load(os.path.join('saved_file', 'sample_outlier.pth')).cuda()    # [N]
-        # batch_outlier = sample_outlier[indexes]
+        sample_outlier = torch.load(os.path.join('saved_file', 'sample_outlier.pth')).cuda()    # [N]
+        batch_outlier = sample_outlier[indexes]
         # inputs = inputs[batch_outlier == False]
-        # targets = targets[batch_outlier == False]
+        # global_targets = global_targets[batch_outlier == False]
+
         if self.use_cluster_hard_loss:
             losses["global_cluster_hard_loss"] = torch.tensor(0.)
+            losses["global_cluster_hard_loss_unlabel"] = torch.tensor(0.)
             losses["part_cluster_hard_loss"] = torch.tensor(0.)
-            if global_targets.shape[0] > 0:
-                losses["global_cluster_hard_loss"] = self.get_hard_cluster_loss_cluster(labels.clone(), inputs, global_targets, indexes)
- 
+            if global_targets[batch_outlier == False].shape[0] > 0:
+                losses["global_cluster_hard_loss"] = self.get_hard_cluster_loss_cluster_label(labels.clone(), inputs[batch_outlier == False], global_targets[batch_outlier == False])
+            if global_targets[batch_outlier == True].shape[0] > 0:
+                losses["global_cluster_hard_loss_unlabel"] = self.get_hard_cluster_loss_cluster_unlabel(labels.clone(), inputs[batch_outlier == True], global_targets[batch_outlier == True])
+
                 if self.use_part_feat:
-                    bottom_cluster_hard_loss = self.get_hard_cluster_loss(labels.clone(), bottom_inputs, bottom_targets, bottom_IoU, bottom_indexes, bottom_feats)
-                    top_cluster_hard_loss = self.get_hard_cluster_loss(labels.clone(), top_inputs, top_targets, top_IoU, top_indexes, top_feats)
+                    bottom_cluster_hard_loss = self.get_hard_cluster_loss(labels.clone(), bottom_inputs, bottom_targets)
+                    top_cluster_hard_loss = self.get_hard_cluster_loss(labels.clone(), top_inputs, top_targets)
                     losses["part_cluster_hard_loss"] = bottom_cluster_hard_loss + top_cluster_hard_loss
             # print(losses)
         return losses
