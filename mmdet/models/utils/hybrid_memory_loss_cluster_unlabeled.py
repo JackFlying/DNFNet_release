@@ -460,20 +460,20 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
             :IoU: [N]
         """
         B = sim.shape[0]
+
+        cluster_outlier = torch.load(os.path.join('saved_file', 'cluster_outlier.pth')).cuda()    # [N]
+        sim = sim.t()
+        sim[cluster_outlier == False] = 0.
+        sim = sim.t()
+
         self.num_memory = labels.shape[0]
         nums = torch.zeros(labels.max() + 1, 1).float().cuda() # many instances belong to a cluster, so calculate the number of instances in a cluster
         nums.index_add_(0, labels, torch.ones(self.num_memory, 1).float().cuda()) # [C], 求每一个簇样本个数
         mask = (nums > 0).float()
         sim = sim.t()
 
-        cluster_outlier = torch.load(os.path.join('saved_file', 'cluster_outlier.pth')).cuda()    # [N]
-        sim = sim[cluster_outlier == True]
-        mask = mask[cluster_outlier == True]
-        
         mask = mask.expand_as(sim)
         masked_sim, one_hot_pos = self.masked_softmax_multi_focal_unlabel(sim.t().contiguous(), mask.t().contiguous(), targets=targets) # sim: u * B, mask:u * B, masked_sim: B * u
-        # import ipdb;    ipdb.set_trace()
-        
         cluster_hard_loss = ((-torch.log(masked_sim + 1e-6)) * one_hot_pos).sum(-1) / one_hot_pos.sum(-1)
         # cluster_hard_loss = F.nll_loss(torch.log(masked_sim + 1e-6), targets, reduce=False)
         cluster_hard_loss = cluster_hard_loss.mean()
@@ -611,17 +611,24 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
         
         sample_outlier = torch.load(os.path.join('saved_file', 'sample_outlier.pth')).cuda()    # [N]
         batch_outlier = sample_outlier[indexes]
+
         # inputs = inputs[batch_outlier == False]
         # global_targets = global_targets[batch_outlier == False]
 
+        inputs[batch_outlier == True] = 0
+        
         if self.use_cluster_hard_loss:
             losses["global_cluster_hard_loss"] = torch.tensor(0.)
             losses["global_cluster_hard_loss_unlabel"] = torch.tensor(0.)
             losses["part_cluster_hard_loss"] = torch.tensor(0.)
-            if global_targets[batch_outlier == False].shape[0] > 0:
-                losses["global_cluster_hard_loss"] = self.get_hard_cluster_loss_cluster_label(labels.clone(), inputs[batch_outlier == False], global_targets[batch_outlier == False])
-            if global_targets[batch_outlier == True].shape[0] > 0:
-                losses["global_cluster_hard_loss_unlabel"] = self.get_hard_cluster_loss_cluster_unlabel(labels.clone(), inputs[batch_outlier == True], global_targets[batch_outlier == True])
+            
+            if global_targets.shape[0] > 0:
+                losses["global_cluster_hard_loss"] = self.get_hard_cluster_loss_cluster_label(labels.clone(), inputs, global_targets)
+                
+            # if global_targets[batch_outlier == False].shape[0] > 0:
+            #     losses["global_cluster_hard_loss"] = self.get_hard_cluster_loss_cluster_label(labels.clone(), inputs[batch_outlier == False], global_targets[batch_outlier == False])
+            # if global_targets[batch_outlier == True].shape[0] > 0:
+            #     losses["global_cluster_hard_loss_unlabel"] = self.get_hard_cluster_loss_cluster_unlabel(labels.clone(), inputs[batch_outlier == True], global_targets[batch_outlier == True])
 
                 if self.use_part_feat:
                     bottom_cluster_hard_loss = self.get_hard_cluster_loss(labels.clone(), bottom_inputs, bottom_targets)
