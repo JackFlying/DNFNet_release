@@ -5,6 +5,12 @@ import numpy as np
 import collections
 import os
 
+def instance_label(labels):
+    labels = labels[0]
+    sample_num = len(labels)
+    new_labels = np.arange(sample_num)
+    return [new_labels]
+
 def get_outlier(labels):
     """
         将outlier的标签设置为-1
