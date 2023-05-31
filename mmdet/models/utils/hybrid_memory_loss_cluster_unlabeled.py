@@ -185,7 +185,7 @@ class HM(autograd.Function):
         ctx.targets = targets
 
         outputs = inputs.mm(ctx.cluster_mean.t())
-        
+                
         all_inputs = all_gather_tensor(inputs)
         all_indexes = all_gather_tensor(indexes)
         all_IoU = all_gather_tensor(IoU)
@@ -225,7 +225,7 @@ def get_weighted_mean(memory_features):
     mean = torch.mean(memory_features, dim=0)
     return mean
     cos_sim = 1 - memory_features.mm(mean[None].t())    # 余弦相似度越小,越相似
-    cos_sim_sf = F.softmax(cos_sim / 0.1, dim=0)
+    cos_sim_sf = F.softmax(cos_sim / 1, dim=0)
     weighted_mean = torch.sum(memory_features * cos_sim_sf, dim=0)
     return weighted_mean
 
@@ -406,7 +406,6 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
         cluster_hard_loss = cluster_hard_loss.mean()
         
         return cluster_hard_loss
-
 
     def masked_softmax_multi_focal_unlabel(self, vec, mask, dim=1, targets=None, epsilon=1e-6):
         """
@@ -599,6 +598,9 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
         else:
             inputs = hm(feats, indexes, labels, self.features, self.cluster_mean, IoU, self.update_method, self.momentum, update_flag, self.IoU_memory_clip, \
                         targets)   # [B, N]
+            # self_sim = feats.mm(feats.t())
+            # one_hot_pos = torch.nn.functional.one_hot(targets, num_classes=self.labels.shape[0])
+            # inputs[one_hot_pos == 1] = self_sim.diag()
             inputs /= self.temp
 
         if self.use_max_IoU_bbox:
@@ -615,7 +617,6 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
         
         # sample_outlier = torch.load(os.path.join('saved_file', 'sample_outlier.pth')).cuda()    # [N]
         # batch_outlier = sample_outlier[indexes]
-
         # inputs = inputs[batch_outlier == False]
         # global_targets = global_targets[batch_outlier == False]
         

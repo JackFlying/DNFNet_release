@@ -33,7 +33,6 @@ class SEBlock(nn.Module):
         nn.init.constant_(self.fc2.bias, 0)
 
     def forward(self, x):
-        # import ipdb;    ipdb.set_trace()
         b, c, _, _ = x.size()
         y = self.avg_pool(x).view(b, c)
         y = F.relu(self.fc1(y))
@@ -81,6 +80,9 @@ class MultiHeadCrossAttention(nn.Module):
 
         # 进行最终线性变换得到输出
         output = self.fc_o(attended_value)  # [N, 1, D]
+        
+        # 残差连接
+        output = output + query
 
         return output
 
@@ -93,7 +95,6 @@ class MultiHeadCrossAttention(nn.Module):
         batch_size, _, seq_len, _ = x.size()
         x = x.transpose(1, 2).contiguous()
         return x.view(batch_size, seq_len, self.num_heads * self.head_dim)
-
 
 @HEADS.register_module()
 class DNFNet2Head(nn.Module):
@@ -276,8 +277,11 @@ class DNFNet2Head(nn.Module):
         self.proposal_score_max = False
         # self.gt_fused_gru = nn.GRU(input_size=self.reid_feat_dim, hidden_size=self.reid_feat_dim, batch_first=True)
         
+        # decoder_layer = nn.TransformerDecoderLayer(d_model=256, nhead=2, dim_feedforward=1024, dropout=0.0, activation='relu')
+        # self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=1)
+        
         # self.se = SEBlock(in_channels * 2, reduction=16)
-        # self.mha = MultiHeadCrossAttention(input_dim=self.reid_feat_dim, num_heads=4)
+        self.mha = MultiHeadCrossAttention(input_dim=self.reid_feat_dim, num_heads=4)
         
         # self.fc1 = nn.Linear(self.reid_feat_dim, self.reid_feat_dim)
         # self.fc2 = nn.Linear(self.reid_feat_dim, self.reid_feat_dim)
@@ -298,7 +302,11 @@ class DNFNet2Head(nn.Module):
             
         nn.init.normal_(self.fc_reid.weight, 0, 0.001)
         nn.init.constant_(self.fc_reid.bias, 0)
-        
+
+        # for name, param in self.gt_fused_gru.named_parameters():
+        #     if 'weight' in name:
+        #         nn.init.normal_(param, 0, 0.01)
+    
         # nn.init.normal_(self.fc1.weight, 0, 0.001)
         # nn.init.constant_(self.fc1.bias, 0)
 
@@ -416,18 +424,18 @@ class DNFNet2Head(nn.Module):
         assert fused_pred_feats.shape[0] == feats.shape[0]
         return fused_pred_feats
 
-
     @auto_fp16()
     def forward(self, x, part_feats, labels, rois, bbox_targets, pos_is_gt_list):
-        x = self.deform_conv(x)
 
+        x = self.deform_conv(x)
+        
         if self.training:
             id_labels = labels[:, 1]
             # id_labels_fg = id_labels[id_labels != -2]
             # x_fg = x[id_labels != -2]
             # targets = self.loss_reid.get_cluster_ids(id_labels_fg)
             # x[id_labels != -2] = self.integrate_context_by_SE(x_fg, targets, pos_is_gt_list)
-
+        
         cls_feat = x
         reg_feat = x
 
@@ -646,18 +654,25 @@ class DNFNet2Head(nn.Module):
                     pred_gt_index = pred_gt_matrix.argmax(dim=0)
                     pred_gt_feats = gt_feats[pred_gt_index]
 
-                    # 1. GRU融合
-                    pred_gt_feats = pred_gt_feats[:, None, :]   # [N, L, D]
-                    pred_feats = pred_feats[:, None, :].transpose(0, 1) # [N, D] -> [N, 1, D] -> [1, N, D]
-                    output, hn = self.gt_fused_gru(pred_gt_feats, pred_feats)   # inputs, h0
-                    update_pred_feats = hn.squeeze(0)
-                    
-                    # 2. attention融合
-                    # pred_gt_feats = pred_gt_feats[:, None, :]   # [N, 1, D]
+                    # # 1. GRU融合, gt作为input
+                    # pred_gt_feats = pred_gt_feats[:, None, :]   # [N, L, D]
+                    # pred_feats = pred_feats[:, None, :].transpose(0, 1) # [N, D] -> [N, 1, D] -> [1, N, D]
+                    # output, hn = self.gt_fused_gru(pred_gt_feats, pred_feats)   # inputs, h0
+                    # update_pred_feats = hn.squeeze(0)
+
+                    # 2. GRU融合, gt作为hidden state
+                    # pred_gt_feats = pred_gt_feats[:, None, :].transpose(0, 1)
                     # pred_feats = pred_feats[:, None, :]
-                    # update_pred_feats = self.mha(pred_feats, pred_gt_feats, pred_gt_feats)
-                    # update_pred_feats = update_pred_feats.squeeze(1)
+                    # output, hn = self.gt_fused_gru(pred_feats, pred_gt_feats)   # inputs, h0
+                    # update_pred_feats = output.squeeze(1)
                     
+                    # 3. attention融合
+                    pred_gt_feats = pred_gt_feats[:, None, :]   # [N, 1, D] -> [1, N, D]
+                    pred_feats = pred_feats[:, None, :] # [N, 1, D] -> [1, N, D]
+                    update_pred_feats = self.mha(pred_feats, pred_gt_feats, pred_gt_feats)
+                    update_pred_feats = update_pred_feats.squeeze(1)
+                    # update_pred_feats = self.transformer_decoder(pred_gt_feats, pred_feats)   # tgt:解码器的序列; memory:编码器最后一层的序列;
+                    # update_pred_feats = update_pred_feats.squeeze(0)
                     fused_pred_feats.append(update_pred_feats)
                     
                 else:   # 有预测但是没有gt
@@ -762,9 +777,10 @@ class DNFNet2Head(nn.Module):
         rid_pred = id_pred[id_labels!=-2]   # [B, 256]
         rid_labels = id_labels[id_labels!=-2]
         rpart_feats = part_feats[id_labels!=-2] if part_feats is not None else None
-        
-        # targets = self.loss_reid.get_cluster_ids(rid_labels)
-        # rid_pred = self.integrate_gt_context(rid_pred, targets, pos_is_gt_list)
+
+        targets = self.loss_reid.get_cluster_ids(rid_labels)
+        rid_pred = self.integrate_gt_context(rid_pred, targets, pos_is_gt_list)
+        # id_pred[id_labels!=-2] = rid_pred
         
         memory_loss = self.loss_reid(rid_pred, rid_labels, IoU, rpart_feats, top_IoU, bottom_IoU, pos_is_gt_list)
         memory_loss['global_cluster_hard_loss'] *= self.global_weight
@@ -775,15 +791,7 @@ class DNFNet2Head(nn.Module):
             cluster_id_labels = self.loss_reid.get_cluster_ids(id_labels[id_labels != -2])
             new_id_labels = id_labels.clone()
             new_id_labels[id_labels != -2] = cluster_id_labels
-            
-            # batch_features = self.loss_reid.get_features(id_labels[id_labels != -2])
-            # id_pred = torch.cat([id_pred, batch_features], dim=0)
-            # new_id_labels = torch.cat([new_id_labels, id_labels[id_labels != -2]], dim=0)
             losses['global_triplet_loss'] = self.loss_triplet(id_pred, new_id_labels, id_labels, IoU) * self.triplet_weight
-            
-            # all_features = self.loss_reid.get_all_features()
-            # all_labels = self.loss_reid.get_all_cluster_ids()
-            # losses['global_triplet_loss'] = self.loss_triplet(id_pred, new_id_labels, id_labels, IoU, all_features, all_labels) * self.triplet_weight
 
         return losses
 

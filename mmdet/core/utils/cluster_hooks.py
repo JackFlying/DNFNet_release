@@ -116,7 +116,7 @@ class ClusterHook(Hook):
             torch.save(pseudo_labels, os.path.join("saved_file", "pseudo_labels.pth"))
 
         # 统计每个类别的数量，将异常点单独存放在unlabel memory当中
-        pseudo_labels = instance_label(pseudo_labels)
+        # pseudo_labels = instance_label(pseudo_labels)
         # pseudo_labels = get_outlier(pseudo_labels)
 
         memory_labels, memory_blabels, memory_tlabels = [], [], []
