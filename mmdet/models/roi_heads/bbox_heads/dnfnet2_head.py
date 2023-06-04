@@ -281,7 +281,7 @@ class DNFNet2Head(nn.Module):
         # self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=1)
         
         # self.se = SEBlock(in_channels * 2, reduction=16)
-        self.mha = MultiHeadCrossAttention(input_dim=self.reid_feat_dim, num_heads=4)
+        # self.mha = MultiHeadCrossAttention(input_dim=self.reid_feat_dim, num_heads=4)
         
         # self.fc1 = nn.Linear(self.reid_feat_dim, self.reid_feat_dim)
         # self.fc2 = nn.Linear(self.reid_feat_dim, self.reid_feat_dim)
@@ -778,8 +778,8 @@ class DNFNet2Head(nn.Module):
         rid_labels = id_labels[id_labels!=-2]
         rpart_feats = part_feats[id_labels!=-2] if part_feats is not None else None
 
-        targets = self.loss_reid.get_cluster_ids(rid_labels)
-        rid_pred = self.integrate_gt_context(rid_pred, targets, pos_is_gt_list)
+        # targets = self.loss_reid.get_cluster_ids(rid_labels)
+        # rid_pred = self.integrate_gt_context(rid_pred, targets, pos_is_gt_list)
         # id_pred[id_labels!=-2] = rid_pred
         
         memory_loss = self.loss_reid(rid_pred, rid_labels, IoU, rpart_feats, top_IoU, bottom_IoU, pos_is_gt_list)

@@ -90,8 +90,8 @@ class ClusterHook(Hook):
                     image_inds=runner.model.module.roi_head.bbox_head.loss_reid.idx[:len(memory_features[0])].clone().cpu(),
                     cfg=self.cfg
                 )
-                # pseudo_labels = get_uncertainty_by_centroid(pseudo_labels, memory_features, self.logger, self.cfg.PSEUDO_LABELS.T)
-                # pseudo_labels = [pseudo_labels]
+                pseudo_labels = get_uncertainty_by_centroid(pseudo_labels, memory_features, self.logger, self.cfg.PSEUDO_LABELS.T)
+                pseudo_labels = [pseudo_labels]
 
             else:
                 self.cfg.PSEUDO_LABELS.part_feat.use_part_feat = True   # 为了防止新的epoch自动变成0
@@ -140,6 +140,8 @@ class ClusterHook(Hook):
         if self.part_based_uncertainty:
             memory_blabels = torch.cat(memory_blabels).view(-1)
             memory_tlabels = torch.cat(memory_tlabels).view(-1)
+            
+        runner.model.module.roi_head.bbox_head.loss_reid.clock = 0
         
         if hasattr(runner.model.module.roi_head.bbox_head.loss_reid, "use_cluster_memory"):
             if hasattr(runner.model.module.roi_head.bbox_head.loss_reid, "cluster_mean"):   # use mean
