@@ -174,7 +174,8 @@ def hm_part(inputs, bottom_inputs, top_inputs, indexes, labels, cluster_mean, cl
 class HM(autograd.Function):
     @staticmethod
     @custom_fwd(cast_inputs=torch.float32)
-    def forward(ctx, inputs, indexes, labels, features, cluster_mean, tflag, IoU, update_method, momentum, update_flag, IoU_memory_clip, targets):
+    def forward(ctx, inputs, indexes, labels, features, cluster_mean, tflag, IoU, update_method, momentum, update_flag, IoU_memory_clip, targets, \
+                        clock, cluster_mean_method, tc_winsize, intra_cluster_T):
         ctx.features = features # memory特征
         ctx.cluster_mean = cluster_mean
         ctx.labels = labels
@@ -183,6 +184,10 @@ class HM(autograd.Function):
         ctx.update_flag = update_flag
         ctx.IoU_memory_clip = IoU_memory_clip
         ctx.targets = targets
+        ctx.clock = clock
+        ctx.cluster_mean_method = cluster_mean_method
+        ctx.tc_winsize = tc_winsize
+        ctx.intra_cluster_T = intra_cluster_T
 
         outputs = inputs.mm(ctx.cluster_mean.t())
                 
@@ -210,10 +215,17 @@ class HM(autograd.Function):
             elif ctx.update_method == "max_iou":
                 if uf:
                     ctx.features[y] = x
-            # ctx.features[y] /= ctx.features[y].norm()
-            # ctx.cluster_mean[tg], ctx.cluster_std[tg] = get_mean_conv(ctx.features[ctx.labels == tg])
-            # ctx.cluster_mean[tg], _ = get_mean_conv(ctx.features[ctx.labels == tg])
-            # ctx.cluster_mean[tg] = label_noise_mean(ctx.features[ctx.labels == tg])
+            ctx.features[y] /= ctx.features[y].norm()
+
+            if ctx.cluster_mean_method == 'naive':
+                ctx.cluster_mean[tg], _ = get_mean_conv(ctx.features[ctx.labels == tg])
+            elif ctx.cluster_mean_method == "intra_cluster":
+                ctx.cluster_mean[tg] = intra_cluster(ctx.features[ctx.labels == tg], T=ctx.intra_cluster_T)
+            elif ctx.cluster_mean_method == "time_consistency":
+                ctx.cluster_mean[tg] = time_consistency(ctx.features[ctx.labels == tg], tflag[ctx.labels == tg], ctx.clock, win_size=ctx.tc_winsize)
+            elif ctx.cluster_mean_method == "intra_cluster_time_consistency":
+                ctx.cluster_mean[tg] = intra_cluster_time_consistency(ctx.features[ctx.labels == tg], tflag[ctx.labels == tg], ctx.clock, \
+                            win_size=ctx.tc_winsize, T=ctx.intra_cluster_T)
             
             # 1. 特征加权
             # lb_mean = label_noise_mean(ctx.features[ctx.labels == tg])
@@ -222,37 +234,51 @@ class HM(autograd.Function):
             # ctx.cluster_mean[tg] = alpha * lb_mean + (1 - alpha) * tc_mean
             
             # 2. 权重加权
-            # ctx.cluster_mean[tg] = label_noise_time_consistency_mean(ctx.features[ctx.labels == tg], tflag[ctx.labels == tg])
+            # ctx.cluster_mean[tg] = ln_tc_weight_mean(ctx.features[ctx.labels == tg], tflag[ctx.labels == tg])
             
-            # 3.fix bug, 每个epoch flag都要重置一下
-            ctx.cluster_mean[tg] = time_consistency_mean(ctx.features[ctx.labels == tg], tflag[ctx.labels == tg])
-
+            # 3. slide window
+            # ctx.cluster_mean[tg] = ln_tc_winsize_mean(ctx.features[ctx.labels == tg], tflag[ctx.labels == tg], ctx.clock)
+            
         return grad_inputs, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None
 
 
-def label_noise_mean(memory_features):
+def intra_cluster(memory_features, T=0.1):
     """
         距离聚类中心越近，权重越高
         memory_features: [K, D]
     """
     mean = torch.mean(memory_features, dim=0)
-    # return mean
     cos_sim = 1 - memory_features.mm(mean[None].t())    # 余弦相似度越小,越相似
-    cos_sim_sf = F.softmax(cos_sim / 0.1, dim=0)
+    cos_sim_sf = F.softmax(cos_sim / T, dim=0)
     weighted_mean = torch.sum(memory_features * cos_sim_sf, dim=0)
     return weighted_mean
 
-def time_consistency_mean(memory_features, tflag):
+def time_consistency(memory_features, tflag, clock, win_size=500):
     """
-        fflag越小表示越久没更新
+        tflag越小表示越久没更新
         memory_features: [K, D]
     """
-    # 越久没更新的样本,tflag越小,相应的权重也应该低
-    weight = F.softmax(tflag.float(), dim=0)[:, None]
-    weighted_mean = torch.sum(memory_features * weight, dim=0)
+    # 1. 加权融合。越久没更新的样本,tflag越小,相应的权重也应该低
+    # weight = F.softmax(tflag.float(), dim=0)[:, None]
+    # weighted_mean = torch.sum(memory_features * weight, dim=0)
+
+    tflag_latest = clock - tflag < win_size
+    weighted_mean = torch.mean(memory_features[tflag_latest], dim=0)    
     return weighted_mean
 
-def label_noise_time_consistency_mean(memory_features, tflag):
+def intra_cluster_time_consistency(memory_features, tflag, clock, win_size=500, T=0.05):
+
+    # 1.time consistency
+    tflag_latest = clock - tflag < win_size
+    memory_features = memory_features[tflag_latest]
+    # 2. intra cluster
+    mean = torch.mean(memory_features, dim=0)
+    cos_sim = 1 - memory_features.mm(mean[None].t())    # 余弦相似度越小,越相似
+    cos_sim_sf = F.softmax(cos_sim / T, dim=0)
+    weighted_mean = torch.sum(memory_features * cos_sim_sf, dim=0)
+    return weighted_mean
+
+def ln_tc_weight_mean(memory_features, tflag):
 
     """
         fflag越小表示越久没更新
@@ -267,16 +293,18 @@ def label_noise_time_consistency_mean(memory_features, tflag):
     alpha = 0.5
     fused_weight = alpha * cos_weight + (1 - alpha) * tc_weight
     # 2. min融合
-    min_weight = torch.min(cos_weight, tc_weight, dim=0)
-    
-    weighted_mean = torch.sum(memory_features * fused_weight, dim=0)
+    min_weight, _ = torch.min(torch.stack([cos_weight.squeeze(1), tc_weight.squeeze(1)]), dim=0)
+    min_weight /= min_weight.sum()
+    min_weight = min_weight[:, None]
+    weighted_mean = torch.sum(memory_features * min_weight, dim=0)
     return weighted_mean
 
 
-def hm(inputs, indexes, labels, features, cluster_mean, tflag, IoU, update_method=None, momentum=0.5, update_flag=None, IoU_memory_clip=0.2, targets=None):
+def hm(inputs, indexes, labels, features, cluster_mean, tflag, IoU, update_method=None, momentum=0.5, update_flag=None, IoU_memory_clip=0.2, \
+            targets=None, clock=0, cluster_mean_method='naive', tc_winsize=500, intra_cluster_T=0.1):
     return HM.apply(
         inputs, indexes, labels, features, cluster_mean, tflag, IoU, update_method, torch.Tensor([momentum]).to(inputs.device), update_flag, \
-            torch.Tensor(IoU_memory_clip).to(inputs.device), targets
+            torch.Tensor(IoU_memory_clip).to(inputs.device), targets, clock, cluster_mean_method, tc_winsize, intra_cluster_T,
     )
 
 class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
@@ -284,7 +312,8 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
     def __init__(self, num_features, num_memory, temp=0.05, momentum=0.2, cluster_top_percent=0.1, instance_top_percent=1, \
                     use_cluster_hard_loss=True, use_instance_hard_loss=False, use_hybrid_loss=False, testing=False, use_uncertainty_loss=False,
                     use_IoU_loss=False, use_IoU_memory=False, IoU_loss_clip=[0.7, 1.0], IoU_memory_clip=[0.2, 0.9], IoU_momentum=0.2,
-                    use_part_feat=False, co_learning=False, use_hard_mining=False, use_max_IoU_bbox=False, update_method=None):
+                    use_part_feat=False, co_learning=False, use_hard_mining=False, use_max_IoU_bbox=False, update_method=None, cluster_mean_method=None,\
+                        tc_winsize=500, intra_cluster_T=0.1):
         super(HybridMemoryMultiFocalPercentClusterUnlabeled, self).__init__()
         self.use_cluster_hard_loss = use_cluster_hard_loss
         self.use_instance_hard_loss = use_instance_hard_loss
@@ -299,6 +328,8 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
         self.update_method = update_method
         self.use_cluster_memory = True
         self.clock = 0
+        self.tc_winsize = tc_winsize
+        self.intra_cluster_T = intra_cluster_T
         
         if testing == True:
             num_memory = 500
@@ -316,6 +347,7 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
         self.hard_mining = use_hard_mining
         self.use_max_IoU_bbox = use_max_IoU_bbox
         self.iou_threshold = 0.
+        self.cluster_mean_method = cluster_mean_method
 
         self.idx = torch.zeros(num_memory).long()
         self.register_buffer("features", torch.zeros(num_memory, num_features))
@@ -643,7 +675,7 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
             inputs, bottom_inputs, top_inputs = inputs / self.temp, bottom_inputs / self.temp, top_inputs / self.temp
         else:
             inputs = hm(feats, indexes, labels, self.features, self.cluster_mean, self.tflag, IoU, self.update_method, self.momentum, update_flag, self.IoU_memory_clip, \
-                        targets)   # [B, N]
+                        targets, self.clock, self.cluster_mean_method, self.tc_winsize, self.intra_cluster_T)   # [B, N]
             # self_sim = feats.mm(feats.t())
             # one_hot_pos = torch.nn.functional.one_hot(targets, num_classes=self.labels.shape[0])
             # inputs[one_hot_pos == 1] = self_sim.diag()

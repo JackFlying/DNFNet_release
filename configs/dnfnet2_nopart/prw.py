@@ -3,7 +3,7 @@ _base_ = [
     '../_base_/datasets/coco_reid_unsup_prw.py',
     '../_base_/schedules/schedule_1x_reid_norm_base.py', '../_base_/default_runtime.py'
 ]
-TEST = True
+TEST = False
 USE_PART_FEAT = False
 GLOBAL_WEIGHT = 0.9
 CO_LEARNING = False
@@ -61,13 +61,16 @@ model = dict(
             norm_type='l2norm',    # ['l2norm', 'protonorm', 'batchnorm']
             seperate_norm=False,
             use_bn_affine=False,
-            update_method='max_iou',    # ['momentum', 'iou', 'max_iou', 'max_iou_momentum]
+            update_method='momentum',    # ['momentum', 'iou', 'max_iou', 'max_iou_momentum]
             co_learning=CO_LEARNING,
             use_max_IoU_bbox=False,
             IoU_loss_clip=[0.7, 1.0],
             IoU_memory_clip=[0.05, 0.9],
             IoU_momentum=0.2,
             momentum=0.2,
+            cluster_mean_method='naive',    # ['naive', 'intra_cluster', 'time_consistency', 'intra_cluster_time_consistency']
+            tc_winsize=500,
+            intra_cluster_T=0.1,
             use_part_feat=USE_PART_FEAT,
             global_weight= GLOBAL_WEIGHT if USE_PART_FEAT else 1,
             use_hybrid_loss=False,
@@ -222,7 +225,10 @@ PSEUDO_LABELS = dict(
                     refine_global_weight=0.5
                     ),
     K=10,
-    T=1,
+    inter_cluster=dict(
+                    use_inter_cluster=False,
+                    T=1,
+                    )
 )
 # fp16 = dict(loss_scale=512.)
 workflow = [('train', 1)]

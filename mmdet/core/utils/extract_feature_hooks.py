@@ -46,7 +46,6 @@ class ExtractFeatureHook(Hook):
         self.use_gfn = cfg.USE_GFN
         self.use_feature_std = cfg.USE_STD
         
-    
     def before_run(self, runner):
         if not os.path.exists('saved_file'):
             os.mkdir('saved_file')
@@ -140,7 +139,7 @@ class ExtractFeatureHook(Hook):
         prog_bar = mmcv.ProgressBar(len(data_loader))
         for i in range(len(data_loader)):
             if self.cfg.testing:
-                if i > 120:
+                if i > 60:
                     break
             data = next(data_iter)
             gt_bboxes=data['gt_bboxes'][0]._data[0][0]

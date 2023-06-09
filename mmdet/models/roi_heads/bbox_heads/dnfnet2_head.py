@@ -136,6 +136,9 @@ class DNFNet2Head(nn.Module):
                  IoU_loss_clip=[0.7, 1.0],
                  IoU_memory_clip=[0.2, 0.9],
                  IoU_momentum=0.1,
+                 cluster_mean_method='naive',
+                 tc_winsize=500,
+                 intra_cluster_T=0.1,
                  use_part_feat=False,
                  use_uncertainty_loss=False,
                  use_hybrid_loss=False,
@@ -178,7 +181,8 @@ class DNFNet2Head(nn.Module):
                                                         use_instance_hard_loss=use_instance_hard_loss, use_hybrid_loss=use_hybrid_loss, use_IoU_loss=use_IoU_loss, \
                                                         use_IoU_memory=use_IoU_memory, IoU_loss_clip=IoU_loss_clip, IoU_memory_clip=IoU_memory_clip, \
                                                         IoU_momentum=IoU_momentum, use_uncertainty_loss=use_uncertainty_loss, update_method=update_method,
-                                                        use_part_feat=use_part_feat, co_learning=co_learning, use_hard_mining=use_hard_mining, use_max_IoU_bbox=use_max_IoU_bbox)
+                                                        use_part_feat=use_part_feat, co_learning=co_learning, use_hard_mining=use_hard_mining, use_max_IoU_bbox=use_max_IoU_bbox, \
+                                                        cluster_mean_method=cluster_mean_method, tc_winsize=tc_winsize, intra_cluster_T=intra_cluster_T)
         
         self.loss_triplet = Quaduplet2Loss(margin=margin, bg_weight=triplet_bg_weight, instance_weight=triplet_instance_weight, use_IoU_loss=use_IoU_loss, \
                                             IoU_loss_clip=IoU_loss_clip, use_uncertainty_loss=use_uncertainty_loss, use_hard_mining=use_hard_mining)

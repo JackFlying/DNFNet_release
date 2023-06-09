@@ -47,12 +47,9 @@ class ClusterHook(Hook):
         self.label_generator = LabelGenerator(self.cfg, self.dataloaders)
         self.epoch = 0
         self.epoch_interval = epoch_interval
-        # self.uncertainty_estimation = False
-        # self.co_learning = cfg.CO_LEARNING
         self.use_part_feat = cfg.PSEUDO_LABELS.part_feat.use_part_feat
         self.part_based_uncertainty = cfg.PSEUDO_LABELS.part_feat.uncertainty
-        # self.use_k_reciprocal_nearest = cfg.PSEUDO_LABELS.use_k_reciprocal_nearest
-        # self.co_learning = cfg.CO_LEARNING
+        self.use_inter_cluster = cfg.PSEUDO_LABELS.inter_cluster.use_inter_cluster
     
     def before_train_epoch(self, runner):
         self.logger.info('start clustering for updating, pseudo labels')
@@ -90,8 +87,9 @@ class ClusterHook(Hook):
                     image_inds=runner.model.module.roi_head.bbox_head.loss_reid.idx[:len(memory_features[0])].clone().cpu(),
                     cfg=self.cfg
                 )
-                pseudo_labels = get_uncertainty_by_centroid(pseudo_labels, memory_features, self.logger, self.cfg.PSEUDO_LABELS.T)
-                pseudo_labels = [pseudo_labels]
+                if self.use_inter_cluster:
+                    pseudo_labels = get_uncertainty_by_centroid(pseudo_labels, memory_features, self.logger, self.cfg.PSEUDO_LABELS.inter_cluster.T)
+                    pseudo_labels = [pseudo_labels]
 
             else:
                 self.cfg.PSEUDO_LABELS.part_feat.use_part_feat = True   # 为了防止新的epoch自动变成0

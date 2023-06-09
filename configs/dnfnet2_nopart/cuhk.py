@@ -4,12 +4,13 @@ _base_ = [
     '../_base_/schedules/schedule_1x_reid_norm_base.py', '../_base_/default_runtime.py'
 ]
 TEST = False
-USE_PART_FEAT = True
+USE_PART_FEAT = False
 GLOBAL_WEIGHT = 0.8
 CO_LEARNING = False
 UNCERTAINTY = False
 HARD_MINING = False
 USE_GFN = False
+USE_STD = False
 model = dict(
     backbone=dict(
         type='ResNet',
@@ -29,7 +30,7 @@ model = dict(
         use_dconv=True,
         kernel1=True),
     roi_head=dict(
-        type='ReidRoIHeadDNFNet2Cluster',
+        type='ReidRoIHeadDNFNet2',
         use_gfn=USE_GFN,
         use_RoI_Align_feat=False,
         use_part_feat=USE_PART_FEAT,
@@ -45,7 +46,7 @@ model = dict(
         bbox_head=dict(
             in_channels=1024,
             testing=TEST,
-            type='DNFNet2ClusterHead',
+            type='DNFNet2Head',
             id_num=55272,
             rcnn_bbox_bn=True,
             cluster_top_percent=0.6,
@@ -67,6 +68,9 @@ model = dict(
             IoU_memory_clip=[0.05, 0.9],
             IoU_momentum=0.1,
             momentum=0.2,
+            cluster_mean_method='time_consistency',    # ['naive', 'intra_cluster', 'time_consistency', 'intra_cluster_time_consistency']
+            tc_winsize=500,
+            intra_cluster_T=0.1,
             use_part_feat=USE_PART_FEAT,
             global_weight= GLOBAL_WEIGHT if USE_PART_FEAT else 1,
             use_hybrid_loss=False,
@@ -220,6 +224,10 @@ PSEUDO_LABELS = dict(
                     label_refine_iters=0,
                     refine_global_weight=0.5),
     K=10,
+    inter_cluster=dict(
+                    use_inter_cluster=True,
+                    T=1,
+                    )
 )
 # fp16 = dict(loss_scale=512.)
 workflow = [('train', 1)]
