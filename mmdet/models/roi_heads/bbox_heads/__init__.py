@@ -9,10 +9,11 @@ from .dnfnet2_cluster_head import DNFNet2ClusterHead
 from .hhcl_head import HHCLHead
 from .colearning_head import CoLearningHead
 from .dicl_head import DICLHead
+from .dnfnet2_dicl_head import DNFNetDICLHead
 
 __all__ = [
     'BBoxHead', 'ConvFCBBoxHead', 'Shared2FCBBoxHead',
     'Shared4Conv1FCBBoxHead', 'DoubleConvFCBBoxHead', 'SABLHead',
     'HHCLHead', 'CoLearningHead', 'DNFNetHead', 'DNFNet2Head',
-    'DICLHead', 'DNFNet2ClusterHead'
+    'DICLHead', 'DNFNet2ClusterHead', 'DNFNetDICLHead'
 ]

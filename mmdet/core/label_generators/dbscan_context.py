@@ -104,7 +104,7 @@ def label_generator_dbscan_context(cfg, features, cuda=True, indep_thres=None, a
     if not cuda:
         cfg.PSEUDO_LABELS.search_type = 3
 
-    # compute distance matrix by features
+    # # compute distance matrix by features
     dist = build_dist(cfg.PSEUDO_LABELS, features, verbose=True)
 
     features = features.cpu()
@@ -211,3 +211,145 @@ def label_generator_dbscan_context(cfg, features, cuda=True, indep_thres=None, a
         centers = torch.stack(centers, dim=0)
 
         return labels_normal, centers, num_classes, indep_thres
+
+
+# @torch.no_grad()
+# def label_generator_FINCH_context_SpCL_Plus(cfg, features, cuda=True, indep_thres=None, all_inds=None, **kwargs):
+
+#     unique_inds = set(all_inds.cpu().numpy())
+#     split_num = torch.zeros(len(unique_inds)).long()
+#     for i in range(all_inds.shape[0]):
+#         split_num[all_inds[i]] += 1
+#     split_num = split_num.tolist()
+    
+#     instance_sim = features.mm(features.t())
+
+#     person_sim = torch.zeros(len(unique_inds), len(unique_inds))
+#     if cfg.PSEUDO_LABELS.context_method == "max":
+#         img_sim = get_img_sim_by_max(instance_sim, split_num)
+#     elif cfg.PSEUDO_LABELS.context_method == "mean":
+#         img_sim = get_img_sim_by_mean(instance_sim, split_num, cfg.PSEUDO_LABELS.threshold)
+#     elif cfg.PSEUDO_LABELS.context_method == "zero":
+#         img_sim = torch.zeros(len(unique_inds), len(unique_inds))
+#     elif cfg.PSEUDO_LABELS.context_method == "scene":
+#         scene_features = torch.load("./saved_file/scene_features.pth")
+#         scene_sim = scene_features.mm(scene_features.t())
+
+#     intra_context_mask = get_intra_context_mask(all_inds)
+    
+#     hybrid_instance_sim = build_dist(cfg.PSEUDO_LABELS, features, verbose=True)
+    
+#     hybrid_instance_sim, initial_rank = get_hybrid_sim(instance_sim, split_num, person_sim, img_sim, 0., cfg.PSEUDO_LABELS.lambda_scene, intra_context_mask)
+
+#     labels, centers, num_classes, indep_thres = label_generator_dbscan_context(cfg, features, cuda, indep_thres, all_inds, **kwargs)
+
+#     for i in range(cfg.PSEUDO_LABELS.iters):
+#         print("clustering iteration: {}".format(i + 1))
+#         unique_labels = set(labels.cpu().numpy())
+#         person_sim = torch.zeros(len(unique_inds), len(unique_inds))
+#         for label in unique_labels:
+#             b = (labels == label)
+#             tmp_id = b.nonzero()
+#             img_ids = all_inds[tmp_id]
+#             if len(img_ids) > 1:
+#                 for i in range(len(img_ids)):
+#                     for j in range(0, i, 1):
+#                         person_sim[img_ids[i].item()][img_ids[j].item()] += instance_sim[tmp_id[i].item()][tmp_id[j].item()]
+#                         person_sim[img_ids[j].item()][img_ids[i].item()] += instance_sim[tmp_id[j].item()][tmp_id[i].item()]
+                        
+#         hybrid_instance_sim, initial_rank = get_hybrid_sim(instance_sim, split_num, person_sim, img_sim, cfg.PSEUDO_LABELS.lambda_person, cfg.PSEUDO_LABELS.lambda_scene, intra_context_mask)
+#         labels, centers, num_classes, indep_thres = label_generator_dbscan_context(cfg, features, cuda, indep_thres, all_inds, **kwargs)
+
+#     return labels, centers, num_classes, indep_thres
+
+
+# @torch.no_grad()
+# def get_intra_context_mask(inds):
+#     # 获取mask矩阵，将属于同一张图片的行人的相似度设置为无穷大
+#     N = inds.shape[0]
+#     intra_context_mask = torch.ones((N, N)).bool()
+#     unique_inds = set(inds.cpu().numpy())
+#     for uid in unique_inds: # image idx
+#         b = (inds == uid)
+#         tmp_id = b.nonzero().squeeze(-1).tolist()
+#         for i in range(len(tmp_id)):
+#             for j in range(0, i, 1):
+#                 intra_context_mask[tmp_id[i]][tmp_id[j]] = intra_context_mask[tmp_id[j]][tmp_id[i]] = False
+#     return intra_context_mask
+
+# def get_hybrid_sim(inst_sim_matrix, split_num, person_sim, scene_sim, lambda_person, lambda_scene, intra_context_mask):
+#     """
+#         将上下文相似度加到视觉相似度上面
+#         1. 将上下文相似度维度进行扩充满足视觉相似度
+#         2. 计算最近邻
+#     """
+#     person_sim_extend = get_extend_sim_matrix(person_sim, split_num)
+#     scene_sim_extend = get_extend_sim_matrix(scene_sim, split_num)
+#     hybrid_sim_matrix = inst_sim_matrix + lambda_person * person_sim_extend + lambda_scene * scene_sim_extend
+#     # 将对角线位置填充为负无穷大,自身不能作为最近邻
+#     hybrid_sim_matrix_ = hybrid_sim_matrix.clone()
+#     hybrid_sim_matrix_ = hybrid_sim_matrix_.fill_diagonal_(-100.)
+#     hybrid_sim_matrix_[intra_context_mask == False] = -100
+#     _, initial_rank = torch.max(hybrid_sim_matrix_, dim=-1)
+#     return hybrid_sim_matrix, initial_rank
+
+
+# def get_img_sim_by_max(inst_sim_matrix, split_num):
+#     """
+#         获得图片之间的相似度
+#         1. 计算instance与图片之间的最大相似度
+#         2. 计算图片和图片之间的最大相似度
+#     """
+#     inst_sim_matrix_split = inst_sim_matrix.split(split_num, -1)
+#     img2inst_sim = []
+#     for i in range(len(split_num)):
+#         values, _ = torch.max(inst_sim_matrix_split[i], dim=-1)
+#         img2inst_sim.append(values)
+
+#     img2inst_sim = torch.stack(img2inst_sim, dim=0) # [img_len, inst_len]
+#     img2inst_sim_split = img2inst_sim.split(split_num, -1)
+
+#     img2img_sim = []
+#     for i in range(len(split_num)):
+#         values, _ = torch.max(img2inst_sim_split[i], -1)
+#         img2img_sim.append(values)
+#     img2img_sim = torch.stack(img2img_sim, dim=0)
+#     return img2img_sim
+
+# def get_img_sim_by_mean(inst_sim_matrix, split_num, threshold):
+#     """
+#         获得图片之间的相似度
+#         需要找到正样本的集合
+
+#         1.将相似度小于阈值的设置为0
+#         2.计算instance与image之间的相似度
+#         3.计算instance与instance之间的相似度
+#     """
+#     inst_sim_matrix = inst_sim_matrix * (inst_sim_matrix > threshold)
+#     inst_sim_matrix_split = inst_sim_matrix.split(split_num, -1)
+#     img2inst_sim = []
+#     for i in range(len(split_num)):
+#         values = torch.sum(inst_sim_matrix_split[i], dim=-1)
+#         img2inst_sim.append(values)
+
+#     img2inst_sim = torch.stack(img2inst_sim, dim=0) # [img_len, inst_len]
+#     img2inst_sim_split = img2inst_sim.split(split_num, -1)
+
+#     img2img_sim = []
+#     for i in range(len(split_num)):
+#         values = torch.sum(img2inst_sim_split[i], -1)
+#         img2img_sim.append(values)
+#     img2img_sim = torch.stack(img2img_sim, dim=0)
+#     return img2img_sim
+
+# def get_extend_sim_matrix(sim, split_num):
+#     inst2img_sim = []
+#     for i in range(len(split_num)):
+#         inst2img_sim.append(sim[:, i:i+1].repeat(1, split_num[i]))
+#     inst2img_sim = torch.cat(inst2img_sim, dim=-1)    # [img_len, inst_len]
+    
+#     img2img_sim_extend = []
+#     for i in range(len(split_num)):
+#         img2img_sim_extend.append(inst2img_sim[i:i+1, :].repeat(split_num[i], 1))
+#     img2img_sim_extend = torch.cat(img2img_sim_extend, dim=0)
+#     return img2img_sim_extend

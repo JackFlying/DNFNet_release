@@ -146,15 +146,40 @@ class TwoStageDetector(BaseDetector):
         """
         kwargs['use_crop'] = use_crop
         if use_crop:
-            crop_feats = []
-            for i in range(len(gt_bboxes)):
-                for j in range(len(gt_bboxes[i])):
-                    x1, y1, x2, y2 = gt_bboxes[i][j][0], gt_bboxes[i][j][1], gt_bboxes[i][j][2], gt_bboxes[i][j][3]
-                    crop = img[i:i+1, :, int(y1):int(y2), int(x1):int(x2)]  # y2 - y1 > x2 - x1
-                    # crop = transforms.Compose([transforms.Resize(size=(crop_w, crop_h))])(crop)
-                    crop_feat = self.extract_feat(crop)
-                    crop_feats.append(crop_feat[0])
-            kwargs['crop_feats'] = crop_feats
+            # crop_feats = []
+            # for i in range(len(gt_bboxes)):
+            #     for j in range(len(gt_bboxes[i])):
+            #         x1, y1, x2, y2 = gt_bboxes[i][j][0], gt_bboxes[i][j][1], gt_bboxes[i][j][2], gt_bboxes[i][j][3]
+            #         crop = img[i:i+1, :, int(y1):int(y2), int(x1):int(x2)]  # y2 - y1 > x2 - x1
+            #         # crop = transforms.Compose([transforms.Resize(size=(crop_w, crop_h))])(crop)
+            #         crop_feat = self.extract_feat(crop)
+            #         crop_feats.append(crop_feat[0])
+            # kwargs['crop_feats'] = crop_feats
+            if self.use_mask:
+                with torch.no_grad():
+                    ori_img = img.clone()
+                    C_means = F.adaptive_avg_pool2d(img, (1, 1))
+                    for i in range(img.shape[0]):
+                        C_mean = C_means[i]
+                        for j in range(gt_bboxes[i].shape[0]):
+                            x1, y1, x2, y2 = (gt_bboxes[i][j] + 1).to(torch.int).cpu().numpy()
+                            if (x2 - x1) < 4 or (y2 - y1) < 4:
+                                break
+                            img_gtbbox = img[i, :, y1: y2, x1: x2]
+                            if torch.rand(1) < self.pro_mask:
+                                if self.pixel_mask:
+                                    mask = torch.rand(img_gtbbox.shape[-2:]).type_as(img_gtbbox) <= self.mask_ratio
+                                    img_gtbbox[:, mask] = C_mean.squeeze(-1)
+                                else:
+                                    h = int((y2 - y1) / 14)
+                                    w = int((x2 - x1) / 6)
+                                    center_x = torch.randint(6, (self.num_mask_patch,)) * w
+                                    center_y = torch.randint(14, (self.num_mask_patch,)) * h
+                                    mask = torch.zeros(img_gtbbox.shape[-2:]).type_as(img_gtbbox)
+                                    for n in range(self.num_mask_patch):
+                                        mask[center_y[n]: center_y[n] + h, center_x[n]: center_x[n] + w] = 1
+                                    img_gtbbox[:, mask.bool()] = C_mean.squeeze(-1)
+                img = img.detach()
         else:
             kwargs['crop_feats'] = None
 

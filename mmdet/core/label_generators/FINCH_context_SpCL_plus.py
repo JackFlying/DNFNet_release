@@ -211,11 +211,11 @@ def list_duplicates(seq):
     tally = collections.defaultdict(list)
     for i,item in enumerate(seq):
         tally[item].append(i)
-    dups = [(key,locs) for key,locs in tally.items() if len(locs)>1]    # key表示label,locs表示对应的index
+    dups = [(key,locs) for key,locs in tally.items() if len(locs)>1]    # key表示簇的label,locs表示簇中样本的index
     return dups
 
 @torch.no_grad()
-def process_label_with_context(labels, centers, features, inds, num_classes):
+def process_label_with_intra_context(labels, centers, features, inds, num_classes):
     # if the persons in the same image are clustered in the same clust, remove it
     N_p = features.shape[0]
     N_c = centers.shape[0]
@@ -225,20 +225,28 @@ def process_label_with_context(labels, centers, features, inds, num_classes):
     unique_inds = set(inds.cpu().numpy())
     print("num_classes_pre", num_classes)
     for uid in unique_inds: # image idx
+        if(uid == 0):
+            continue
         b = (inds == uid)
         tmp_id = b.nonzero()
-        tmp_labels = labels[tmp_id] # instance belong to same image
+        tmp_labels = labels[tmp_id] # instance label belong to same image
         dups = list_duplicates(list(tmp_labels.squeeze(1).cpu().numpy()))
         if len(dups) > 0:
             for dup in dups:
+                # dup[0]表示簇标签, dup[1]表示属于该簇同时属于同一张图片的样本
                 tmp_center = centers[dup[0]].cpu().numpy()
+                # TODO 重新求聚类中心，去除掉待筛选的样本
+                # is_selected = (labels == dup[0])
+                # is_selected[tmp_id[dup[1]].squeeze(1)] = False
+                # tmp_center = features[is_selected].mean(0)
+                
                 tmp_features = features[tmp_id[dup[1]].squeeze(1)].cpu().numpy()
                 sim = np.dot(tmp_center, tmp_features.transpose())
                 idx = np.argmax(sim)
                 for i in range(len(sim)):
                     if i != idx:
                         labels[tmp_id[dup[1][i]]] = num_classes
-                        centers = torch.cat((centers, features[tmp_id[dup[1][i]]]))
+                        centers = torch.cat((centers, features[tmp_id[dup[1][i]]])) # 增加聚类中心，实际上为异常点的中心
                         num_classes += 1
     print("num_classes_after", num_classes)
     assert num_classes == centers.shape[0]
@@ -251,6 +259,7 @@ def generate_cluster_features(labels, features):
         if label == -1:
             continue
         centers[labels[i]].append(features[i])
+    # import ipdb;    ipdb.set_trace()
     centers = [
         torch.stack(centers[idx], dim=0).mean(0) for idx in sorted(centers.keys())
     ]
@@ -329,7 +338,7 @@ def get_hybrid_sim(inst_sim_matrix, split_num, person_sim, scene_sim, lambda_per
     # 将对角线位置填充为负无穷大,自身不能作为最近邻
     hybrid_sim_matrix_ = hybrid_sim_matrix.clone()
     hybrid_sim_matrix_ = hybrid_sim_matrix_.fill_diagonal_(-100.)
-    hybrid_sim_matrix_[intra_context_mask == False] = -100
+    # hybrid_sim_matrix_[intra_context_mask == False] = -100
     _, initial_rank = torch.max(hybrid_sim_matrix_, dim=-1)
     return hybrid_sim_matrix, initial_rank
 
@@ -339,17 +348,17 @@ def label_generator_FINCH_context_single(cfg, iters, features_list, initial_rank
     labels_set, num_classes_set, req_c = FINCH(features_list, initial_rank=initial_rank, req_clust=None, distance='cosine', ensure_early_exit=True, verbose=True, cfg=cfg, intra_context_mask=intra_context_mask)
     labels = torch.from_numpy(labels_set[:, iters]).long()
     num_classes = num_classes_set[iters]
-    centers = generate_cluster_features(torch.unique(labels), features)
-    labels, _, num_classes = process_label_with_context(labels, centers, features, all_inds, num_classes)
-    return labels, centers, num_classes
+    centers = generate_cluster_features(labels.tolist(), features)
+    labels, _, num_classes = process_label_with_intra_context(labels, centers, features, all_inds, num_classes)
+    return labels, _, num_classes
 
 @torch.no_grad()
 def label_generator_FINCH_context_SpCL(cfg, features_list, initial_rank, cuda=True, indep_thres=None, all_inds=None, intra_context_mask=None, **kwargs):
     iters = kwargs.get("iters", [0, 1, 2])
     features = features_list[0].cpu()
-    labels_tight, centers_tight, num_classes_tight = label_generator_FINCH_context_single(cfg, iters[2], features_list, initial_rank, all_inds, intra_context_mask)
-    labels_normal, centers_normal, num_classes = label_generator_FINCH_context_single(cfg, iters[1], features_list, initial_rank, all_inds, intra_context_mask)
-    labels_loose, centers_loose, num_classes_loose = label_generator_FINCH_context_single(cfg, iters[0], features_list, initial_rank, all_inds, intra_context_mask)
+    labels_tight, _, num_classes_tight = label_generator_FINCH_context_single(cfg, iters[2], features_list, initial_rank, all_inds, intra_context_mask)
+    labels_normal, _, num_classes = label_generator_FINCH_context_single(cfg, iters[1], features_list, initial_rank, all_inds, intra_context_mask)
+    labels_loose, _, num_classes_loose = label_generator_FINCH_context_single(cfg, iters[0], features_list, initial_rank, all_inds, intra_context_mask)
 
     # compute R_indep and R_comp
     N = labels_normal.size(0)
@@ -425,7 +434,7 @@ def label_generator_FINCH_context_SpCL(cfg, features_list, initial_rank, cuda=Tr
         torch.stack(centers[idx], dim=0).mean(0) for idx in sorted(centers.keys())
     ]
     centers = torch.stack(centers, dim=0)
-
+    
     return labels_normal, centers, num_classes, indep_thres
 
 @torch.no_grad()
@@ -512,18 +521,6 @@ def label_generator_FINCH_context_SpCL_Plus(cfg, features, cuda=True, indep_thre
             labels, centers, num_classes = label_generator_FINCH_context_single(cfg, 0, [features, bottom_features, top_features], initial_rank, all_inds, intra_context_mask)
 
     return labels, centers, num_classes, indep_thres, blabels, tlabels
-
-def generate_cluster_features(labels, features):
-    centers = collections.defaultdict(list)
-    for i, label in enumerate(labels):
-        if label == -1:
-            continue
-        centers[labels[i]].append(features[i])
-    centers = [
-        torch.stack(centers[idx], dim=0).mean(0) for idx in sorted(centers.keys())
-    ]
-    centers = torch.stack(centers, dim=0)
-    return centers
 
 @torch.no_grad()
 def get_intra_context_mask(inds):

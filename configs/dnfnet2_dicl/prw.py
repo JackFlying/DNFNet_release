@@ -1,5 +1,5 @@
 _base_ = [
-    '../_base_/models/faster_rcnn_r50_caffe_c4_reid_norm_unsu_nor5.py', # TODO 从nor5修改为
+    '../_base_/models/faster_rcnn_r50_caffe_c4_reid_norm_unsu_nor5.py', # TODO norm5效果更好
     '../_base_/datasets/coco_reid_unsup_prw.py',
     '../_base_/schedules/schedule_1x_reid_norm_base.py', '../_base_/default_runtime.py'
 ]
@@ -46,10 +46,23 @@ model = dict(
     roi_head=dict(
         type='ReidRoIHeadsiamese',
         bbox_head=dict(
-            type='DICLHead',
+            type='DNFNetDICLHead',
             in_channels=1024,
             id_num=18048,
             testing=TEST,
+            rcnn_bbox_bn=False,
+            cluster_top_percent=0.6,    # defalut: 0.6
+            instance_top_percent=1.0,
+            use_quaduplet_loss=True,
+            use_cluster_hard_loss=True,
+            update_method='max_iou',    # ['momentum', 'iou', 'max_iou', 'momentum_max_iou']
+            use_max_IoU_bbox=False,
+            momentum=0.2,
+            cluster_mean_method='intra_cluster_time_consistency',    # ['naive', 'intra_cluster', 'time_consistency', 'intra_cluster_time_consistency']
+            tc_winsize=500,
+            intra_cluster_T=0.1,
+            use_part_feat=USE_PART_FEAT,
+            num_features=256,
         ),
         bbox_roi_extractor=dict(
             type='SingleRoIExtractor',
@@ -158,7 +171,7 @@ PSEUDO_LABELS = dict(
     norm_feat=True,
     norm_center=True,
     SpCL=True,
-    cluster='dbscan_context',   # dbscan_context, FINCH_context, FINCH_context_SpCL, FINCH_context_SpCL_Plus
+    cluster='FINCH_context_SpCL_Plus',   # dbscan_context, FINCH_context, FINCH_context_SpCL, FINCH_context_SpCL_Plus
     eps=[0.68, 0.7, 0.72],
     min_samples=4, # for dbscan
     dist_metric='jaccard',
@@ -186,10 +199,14 @@ PSEUDO_LABELS = dict(
                     refine_global_weight=0.5
                     ),
     K=10,
+    inter_cluster=dict(
+                    use_inter_cluster=True,
+                    T=1,
+                    )
 )
 # fp16 = dict(loss_scale=512.)
 workflow = [('train', 1)]
-evaluation = dict(start=16, interval=2, metric='bbox')
+evaluation = dict(start=6, interval=2, metric='bbox')
 testing = TEST
 save_features = True
 restart = False

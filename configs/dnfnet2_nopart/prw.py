@@ -3,7 +3,7 @@ _base_ = [
     '../_base_/datasets/coco_reid_unsup_prw.py',
     '../_base_/schedules/schedule_1x_reid_norm_base.py', '../_base_/default_runtime.py'
 ]
-TEST = False
+TEST = True
 USE_PART_FEAT = False
 GLOBAL_WEIGHT = 0.9
 CO_LEARNING = False
@@ -12,6 +12,7 @@ HARD_MINING = False
 USE_GFN = False
 USE_STD = False
 model = dict(
+    # type='TwoStageDetectorsiamese',
     backbone=dict(
         type='ResNet',
         depth=50,
@@ -53,29 +54,16 @@ model = dict(
             instance_top_percent=1.0,
             use_quaduplet_loss=True,
             use_cluster_hard_loss=True,
-            use_instance_hard_loss=False,
-            use_IoU_loss=False,
-            use_IoU_memory=False,
-            use_uncertainty_loss=False,
-            use_hard_mining=False,
             norm_type='l2norm',    # ['l2norm', 'protonorm', 'batchnorm']
-            seperate_norm=False,
             use_bn_affine=False,
-            update_method='momentum',    # ['momentum', 'iou', 'max_iou', 'max_iou_momentum]
-            co_learning=CO_LEARNING,
+            update_method='iou',    # ['momentum', 'iou', 'max_iou', 'momentum_max_iou']
             use_max_IoU_bbox=False,
-            IoU_loss_clip=[0.7, 1.0],
-            IoU_memory_clip=[0.05, 0.9],
-            IoU_momentum=0.2,
             momentum=0.2,
             cluster_mean_method='naive',    # ['naive', 'intra_cluster', 'time_consistency', 'intra_cluster_time_consistency']
             tc_winsize=500,
             intra_cluster_T=0.1,
             use_part_feat=USE_PART_FEAT,
             global_weight= GLOBAL_WEIGHT if USE_PART_FEAT else 1,
-            use_hybrid_loss=False,
-            use_instance_loss=False,
-            use_inter_loss=False,
             triplet_instance_weight=1,
             num_features=256,
             margin=0.3,
@@ -207,7 +195,7 @@ PSEUDO_LABELS = dict(
     cluster_num=None,
     iters=1,    # 1
     lambda_scene=0,   # 调成0,即zero初始化
-    lambda_person=0.1,
+    lambda_person=0.1,  # 0.1
     context_method='zero',
     threshold=0.5,
     use_post_process=False,
@@ -232,7 +220,7 @@ PSEUDO_LABELS = dict(
 )
 # fp16 = dict(loss_scale=512.)
 workflow = [('train', 1)]
-evaluation = dict(start=6, interval=2, metric='bbox')
+evaluation = dict(start=16, interval=2, metric='bbox')
 testing = TEST
 save_features = True
 restart = False

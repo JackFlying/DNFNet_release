@@ -75,6 +75,8 @@ class LabelGenerator(object):
         all_labels, all_blabels, all_tlabels = [], [], []
         all_centers = []
         
+        blabels = None
+        tlabels = None
 
         for idx, (data_loader, dataset) in enumerate(
             zip(self.data_loaders, self.datasets)
@@ -118,6 +120,18 @@ class LabelGenerator(object):
                         eps=self.eps
                     )
                     self.eps = tmp_eps
+                elif self.cluster_type in ['dbscan_context']:
+                    labels, centers, num_classes, indep_thres = self.__factory[
+                        self.cluster_type
+                    ](
+                        self.cfg,
+                        all_features,
+                        num_classes=num_classes,
+                        cuda=cuda,
+                        indep_thres=indep_thres,
+                        all_inds=all_inds,
+                        epoch=epoch,
+                    )
                 else:
                     labels, centers, num_classes, indep_thres, blabels, tlabels = self.__factory[
                         self.cluster_type

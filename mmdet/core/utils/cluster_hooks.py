@@ -49,7 +49,10 @@ class ClusterHook(Hook):
         self.epoch_interval = epoch_interval
         self.use_part_feat = cfg.PSEUDO_LABELS.part_feat.use_part_feat
         self.part_based_uncertainty = cfg.PSEUDO_LABELS.part_feat.uncertainty
-        self.use_inter_cluster = cfg.PSEUDO_LABELS.inter_cluster.use_inter_cluster
+        try:
+            self.use_inter_cluster = cfg.PSEUDO_LABELS.inter_cluster.use_inter_cluster
+        except:
+            self.use_inter_cluster = False
     
     def before_train_epoch(self, runner):
         self.logger.info('start clustering for updating, pseudo labels')

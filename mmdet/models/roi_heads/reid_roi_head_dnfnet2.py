@@ -119,7 +119,6 @@ class ReidRoIHeadDNFNet2(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
                         feats=[lvl_feat[i][None] for lvl_feat in x],
                         crop_feats=crop_feats_list[i])
                 else:
-
                     sampling_result = self.bbox_sampler.sample(
                         assign_result,
                         proposal_list[i],
@@ -351,7 +350,6 @@ class ReidRoIHeadDNFNet2(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
         # apply bbox post-processing to each image individually
         det_bboxes = []
         det_labels = []
-        # import ipdb;    ipdb.set_trace()
 
         for i in range(len(proposals)):
             det_bbox, det_label = self.bbox_head.get_bboxes(

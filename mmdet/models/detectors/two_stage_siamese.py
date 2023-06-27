@@ -211,6 +211,7 @@ class TwoStageDetectorsiamese(BaseDetector):
             dict[str, Tensor]: a dictionary of loss components
         """
         ########Add mask on person region
+        import iddb;    ipdb.set_trace()
         if self.use_mask:
             with torch.no_grad():
                 ori_img = img.clone()
@@ -280,13 +281,6 @@ class TwoStageDetectorsiamese(BaseDetector):
                     gt_labels[i],
                     feats=[lvl_feat[i][None] for lvl_feat in x])
                 sampling_results.append(sampling_result)
-            # import ipdb;    ipdb.set_trace()
-                # print('proposal', len(proposal_list[i]), 'gt', assign_result.num_gts, 'ass_pos', sum(assign_result.gt_inds >= 0), 'ass_neg', sum(assign_result.gt_inds < 0))
-
-        ############# pos-pos #############
-        # pos_bboxes_list = [res.pos_bboxes for res in sampling_results]
-        # proposal_img = self.gt_align(img, pos_bboxes_list)
-        # gt_x = self.extract_feat(proposal_img)
 
         if self.use_mask:
             if self.mask_down:

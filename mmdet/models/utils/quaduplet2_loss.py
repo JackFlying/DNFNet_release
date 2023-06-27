@@ -29,17 +29,13 @@ class Quaduplet2Loss(nn.Module):
     Args:
         margin (float): margin for triplet.
     """
-    def __init__(self, margin=0.3, bg_weight=0.25, instance_weight=1, use_IoU_loss=False, IoU_loss_clip=[0.7, 1], use_uncertainty_loss=False,
-                    use_hard_mining=False):
+    def __init__(self, margin=0.3, bg_weight=0.25, instance_weight=1):
         super(Quaduplet2Loss, self).__init__()
         self.margin = margin
         self.ranking_loss = nn.MarginRankingLoss(margin=margin, reduction='none')
         self.instance_weight = instance_weight
         self.bg_weight = bg_weight
-        self.use_IoU_loss = use_IoU_loss
-        self.use_uncertainty_loss = use_uncertainty_loss
-        self.use_hard_mining = use_hard_mining
-        self.IoU_loss_clip = IoU_loss_clip
+
 
     def forward(self, inputs, targets, index=None, IoU=None):
         """

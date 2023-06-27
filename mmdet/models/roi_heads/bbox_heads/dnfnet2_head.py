@@ -130,28 +130,14 @@ class DNFNet2Head(nn.Module):
                  temperature=0.05,
                  momentum=0.2,
                  use_cluster_hard_loss=True,
-                 use_instance_hard_loss=False,
-                 use_IoU_loss=False,
-                 use_IoU_memory=False,
-                 IoU_loss_clip=[0.7, 1.0],
-                 IoU_memory_clip=[0.2, 0.9],
-                 IoU_momentum=0.1,
                  cluster_mean_method='naive',
                  tc_winsize=500,
                  intra_cluster_T=0.1,
                  use_part_feat=False,
-                 use_uncertainty_loss=False,
-                 use_hybrid_loss=False,
                  use_quaduplet_loss=True,
-                 use_instance_loss=True,
-                 use_inter_loss=False,
                  use_max_IoU_bbox=False,
-                 co_learning=False,
                  use_bn_affine=False,
-                 seperate_norm=False,
                  update_method=None,
-                 co_learning_weight=0.5,
-                 use_hard_mining=False,
                  global_weight=0.9,
                  triplet_weight=1,
                  num_features=256,
@@ -176,30 +162,18 @@ class DNFNet2Head(nn.Module):
         self.bbox_coder = build_bbox_coder(bbox_coder)
         self.loss_cls = build_loss(loss_cls)
         self.loss_bbox = build_loss(loss_bbox)
-        self.loss_reid = HybridMemoryMultiFocalPercentClusterUnlabeled(num_features, id_num, temp=temperature, momentum=momentum, testing=testing, cluster_top_percent=cluster_top_percent, \
-                                                        instance_top_percent=instance_top_percent, use_cluster_hard_loss=use_cluster_hard_loss,
-                                                        use_instance_hard_loss=use_instance_hard_loss, use_hybrid_loss=use_hybrid_loss, use_IoU_loss=use_IoU_loss, \
-                                                        use_IoU_memory=use_IoU_memory, IoU_loss_clip=IoU_loss_clip, IoU_memory_clip=IoU_memory_clip, \
-                                                        IoU_momentum=IoU_momentum, use_uncertainty_loss=use_uncertainty_loss, update_method=update_method,
-                                                        use_part_feat=use_part_feat, co_learning=co_learning, use_hard_mining=use_hard_mining, use_max_IoU_bbox=use_max_IoU_bbox, \
-                                                        cluster_mean_method=cluster_mean_method, tc_winsize=tc_winsize, intra_cluster_T=intra_cluster_T)
+        self.loss_reid = HybridMemoryMultiFocalPercentClusterUnlabeled(num_features, id_num, temperature, momentum, cluster_top_percent, instance_top_percent, use_cluster_hard_loss, testing, \
+                                                        use_part_feat, use_max_IoU_bbox, update_method, cluster_mean_method, tc_winsize, intra_cluster_T)
         
-        self.loss_triplet = Quaduplet2Loss(margin=margin, bg_weight=triplet_bg_weight, instance_weight=triplet_instance_weight, use_IoU_loss=use_IoU_loss, \
-                                            IoU_loss_clip=IoU_loss_clip, use_uncertainty_loss=use_uncertainty_loss, use_hard_mining=use_hard_mining)
+        self.loss_triplet = Quaduplet2Loss(margin=margin, bg_weight=triplet_bg_weight, instance_weight=triplet_instance_weight)
         self.use_quaduplet_loss = use_quaduplet_loss
         self.reid_loss_weight = loss_reid['loss_weight']
         self.triplet_weight = triplet_weight
-        self.use_instance_loss = use_instance_loss
-        self.use_inter_loss = use_inter_loss
         self.global_weight = global_weight
-        self.co_learning = co_learning
-        self.co_learning_weight = co_learning_weight
         self.use_gfn = gfn_config['use_gfn']
         self.norm_type = norm_type   # ['l2norm', 'protonorm', 'batchnorm']
         self.use_bn_affine = use_bn_affine
-        self.seperate_norm = seperate_norm
         in_channels = self.in_channels
-        self.id_counts = []
         self.deform_conv = DeformConv2dPack(
             in_channels,
             in_channels,
@@ -279,7 +253,7 @@ class DNFNet2Head(nn.Module):
             self.normalize_std = nn.BatchNorm1d(num_features=self.reid_feat_dim, affine=self.use_bn_affine)
             self.bgnormalize_std = nn.BatchNorm1d(num_features=self.reid_feat_dim, affine=self.use_bn_affine)
         self.proposal_score_max = False
-        # self.gt_fused_gru = nn.GRU(input_size=self.reid_feat_dim, hidden_size=self.reid_feat_dim, batch_first=True)
+        self.gt_fused_gru = nn.GRU(input_size=self.reid_feat_dim, hidden_size=self.reid_feat_dim, batch_first=True)
         
         # decoder_layer = nn.TransformerDecoderLayer(d_model=256, nhead=2, dim_feedforward=1024, dropout=0.0, activation='relu')
         # self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=1)
@@ -326,7 +300,9 @@ class DNFNet2Head(nn.Module):
         return crop_feat
 
     def get_iou(self, bbox_pred, rois, labels, bbox_targets):
-
+        
+        labels, label_weights, bbox_targets, bbox_weights, bbox_targets_xywh, pos_is_gt_list, crop_targets = bbox_targets
+        
         labels = labels[:, 0]   # 0表示正样本(行人),  1表示负样本(背景)
         if bbox_pred is not None:
             bg_class_ind = self.num_classes # bg_class_ind = 1
@@ -344,20 +320,23 @@ class DNFNet2Head(nn.Module):
                         bbox_pred.size(0), -1, 4)[pos_inds.type(torch.bool),
                         labels[pos_inds.type(torch.bool)]]  # select pos sample
 
-                top_pos_bbox_pred = pos_bbox_pred.clone()   # [x1, y1, x2, y2]
-                top_pos_bbox_pred[:, 3] = top_pos_bbox_pred[:, 3] / 2   # [x1, y1, x2, y2/2]
-                bottom_pos_bbox_pred = pos_bbox_pred.clone()
-                bottom_pos_bbox_pred[:, 1] = bottom_pos_bbox_pred[:, 1] / 2 # [x1, y1/2, x2, y2]
-                
-                pos_bbox_targets = bbox_targets[pos_inds.type(torch.bool)]
-                top_pos_bbox_targets = pos_bbox_targets.clone()
-                top_pos_bbox_targets[:, 3] = top_pos_bbox_targets[:, 3] / 2   # [x1, y1, x2, y2/2]
-                bottom_pos_bbox_targets = pos_bbox_targets.clone()
-                bottom_pos_bbox_targets[:, 1] = bottom_pos_bbox_targets[:, 1] / 2   # [x1, y1/2, x2, y2]
+                decode_pos_bbox_pred = self.bbox_coder.decode(rois[:, 1:][pos_inds.type(torch.bool)], pos_bbox_pred)
+                pos_bbox_targets = bbox_targets_xywh[pos_inds.type(torch.bool)]
 
-                IoU = torchvision.ops.box_iou(pos_bbox_pred, pos_bbox_targets)
+                top_pos_bbox_pred = decode_pos_bbox_pred.clone()   # [x1, y1, x2, y2]
+                top_pos_bbox_pred[:, 1] = (top_pos_bbox_pred[:, 1] + top_pos_bbox_pred[:, 3]) / 2   # [x1, (y1+y2)/2, x2, y2]
+                bottom_pos_bbox_pred = decode_pos_bbox_pred.clone()
+                bottom_pos_bbox_pred[:, 3] = (bottom_pos_bbox_pred[:, 1] + bottom_pos_bbox_pred[:, 3]) / 2  # [x1, y1, x2, (y1+y2)/2]
+                
+                top_pos_bbox_targets = pos_bbox_targets.clone()
+                top_pos_bbox_targets[:, 1] = (top_pos_bbox_targets[:, 1] + top_pos_bbox_targets[:, 3]) / 2
+                bottom_pos_bbox_targets = pos_bbox_targets.clone()
+                bottom_pos_bbox_targets[:, 3] = (bottom_pos_bbox_targets[:, 1] + bottom_pos_bbox_targets[:, 3]) / 2
+
+                IoU = torchvision.ops.box_iou(decode_pos_bbox_pred, pos_bbox_targets)
                 top_IoU = torchvision.ops.box_iou(top_pos_bbox_pred, top_pos_bbox_targets)
                 bottom_IoU = torchvision.ops.box_iou(bottom_pos_bbox_pred, bottom_pos_bbox_targets)
+
 
                 dialog = torch.eye(IoU.shape[0]).bool().cuda()
                 IoU = IoU[dialog]
@@ -366,7 +345,7 @@ class DNFNet2Head(nn.Module):
 
         return IoU, top_IoU, bottom_IoU
 
-    def get_update_flag(self, indexes, IoU):
+    def get_max_iou_pos(self, indexes, IoU):
         unique_labels = torch.unique(indexes)
         update_flag = torch.zeros_like(indexes).bool().to(indexes.device)
         for uid in unique_labels:
@@ -374,20 +353,53 @@ class DNFNet2Head(nn.Module):
             IoU_tmp[indexes!=uid] = -1
             maxid = torch.argmax(IoU_tmp)
             update_flag[maxid] = True
-        return update_flag
+        return update_flag.long()
 
-    def symmetric_normalization(self, adj):
-        # import ipdb;    ipdb.set_trace()
-        # adj = adj + torch.eye(adj.size(0)).cuda()
-        degree = torch.sum(adj, dim=1)
-        D = torch.diag(torch.pow(degree, -0.5))
-        return torch.matmul(torch.matmul(D, adj), D)
-
-    def gcn(self, x, adj):
+    def integrate_max_iou_context(self, feats, targets, indexes, pos_is_gt_list, IoU):
+        """
+            每张图片中的样本和gt proposal拉进
+            pos_is_gt_list: gt的用1表示,预测的用0表示,但是预测和哪个gt之间有对应关系不明确
+        """
         
-        x = F.relu(self.fc1(torch.matmul(adj, x)))
-        x = self.fc2(torch.matmul(adj, x))
-        return x
+        max_iou_pos = self.get_max_iou_pos(indexes, IoU)
+        proposals_nums = [len(value) for value in pos_is_gt_list]
+        pos_is_max_iou_list = max_iou_pos.split(proposals_nums)
+        max_iou_nums = [torch.sum(value).item() for value in pos_is_max_iou_list]
+        pred_nums = [proposals_nums[i] - max_iou_nums[i] for i in range(len(proposals_nums))]
+        cumsum_pro_nums = list(accumulate([0] + proposals_nums))
+
+        fused_pred_feats = []
+        for i in range(1, len(cumsum_pro_nums)):
+            max_iou_num = max_iou_nums[i-1]
+            pred_num = pred_nums[i-1]
+            
+            gt_targets = targets[cumsum_pro_nums[i-1]:cumsum_pro_nums[i]][pos_is_max_iou_list[i-1]==1]
+            pred_targets = targets[cumsum_pro_nums[i-1]:cumsum_pro_nums[i]][pos_is_max_iou_list[i-1]==0]
+            
+            gt_feats = feats[cumsum_pro_nums[i-1]:cumsum_pro_nums[i]][pos_is_max_iou_list[i-1]==1]
+            pred_feats = feats[cumsum_pro_nums[i-1]:cumsum_pro_nums[i]][pos_is_max_iou_list[i-1]==0]
+
+            if max_iou_num > 0:
+                fused_pred_feats.append(gt_feats)   # 自身作为gt也要加入到list中
+            if pred_num > 0:
+                if max_iou_num > 0:
+                    pred_gt_matrix = (gt_targets[:, None] == pred_targets[None]).int()
+                    pred_gt_index = pred_gt_matrix.argmax(dim=0)
+                    pred_gt_feats = gt_feats[pred_gt_index]
+
+                    # 1. GRU融合, gt作为input
+                    pred_gt_feats = pred_gt_feats[:, None, :]   # [N, L, D]
+                    pred_feats = pred_feats[:, None, :].transpose(0, 1) # [N, D] -> [N, 1, D] -> [1, N, D]
+                    output, hn = self.gt_fused_gru(pred_gt_feats, pred_feats)   # inputs, h0
+                    update_pred_feats = hn.squeeze(0)
+                    fused_pred_feats.append(update_pred_feats)
+                    
+                else:   # 有预测但是没有gt
+                    fused_pred_feats.append(pred_feats)
+
+        fused_pred_feats = torch.cat(fused_pred_feats, dim=0)
+        assert fused_pred_feats.shape[0] == feats.shape[0]
+        return fused_pred_feats
 
     def integrate_context_by_SE(self, feats, targets, pos_is_gt_list):
         """
@@ -432,14 +444,6 @@ class DNFNet2Head(nn.Module):
     def forward(self, x, part_feats, labels, rois, bbox_targets, pos_is_gt_list):
 
         x = self.deform_conv(x)
-        
-        if self.training:
-            id_labels = labels[:, 1]
-            # id_labels_fg = id_labels[id_labels != -2]
-            # x_fg = x[id_labels != -2]
-            # targets = self.loss_reid.get_cluster_ids(id_labels_fg)
-            # x[id_labels != -2] = self.integrate_context_by_SE(x_fg, targets, pos_is_gt_list)
-        
         cls_feat = x
         reg_feat = x
 
@@ -456,20 +460,21 @@ class DNFNet2Head(nn.Module):
         x_reid = x
         id_pred = self.fc_reid(x_reid.view(x_reid.size(0), -1))
 
-        # if self.training:
-            # id_labels = labels[:, 1]
-            # id_pred_fg = id_pred[id_labels != -2]
-            # id_labels_fg = id_labels[id_labels != -2]
-            # # id_pred_fg = F.normalize(id_pred_fg)
-            # # sim = id_pred_fg.mm(id_pred_fg.t())
-            # # 同一个id之间做GCN交互
-            # adj_matrix = (id_labels_fg[:, None] == id_labels_fg[None]).float()
-            # adj_matrix_norm = self.symmetric_normalization(adj_matrix)
-            # id_pred_fg_gcn = self.gcn(id_pred_fg, adj_matrix_norm)
-            # id_pred[id_labels != -2] = id_pred_fg_gcn
-            
-        id_pred = F.normalize(id_pred)
+        # import ipdb;    ipdb.set_trace()
+
+        if self.training:
+            id_labels = labels[:, 1]
+        #     IoU, _, _ = self.get_iou(bbox_pred, rois, labels, bbox_targets)
+        #     id_labels_fg = id_labels[id_labels != -2]
+        #     id_pred_fg = id_pred[id_labels != -2]
+        #     targets = self.loss_reid.get_cluster_ids(id_labels_fg)
+        #     id_pred[id_labels != -2] = self.integrate_max_iou_context(id_pred_fg, targets, id_labels_fg, pos_is_gt_list, IoU)
+        # else:
+        #     # import ipdb;    ipdb.set_trace()
+        #     IoU, _, _ = self.get_iou(bbox_pred, rois, labels, bbox_targets)
+        #     id_pred[id_labels != -2] = self.integrate_max_iou_context(id_pred_fg, targets, id_labels_fg, pos_is_gt_list, IoU)
         
+        id_pred = F.normalize(id_pred)
         if self.norm_type in ['protonorm'] and self.training:
             IoU, top_IoU, bottom_IoU = self.get_iou(bbox_pred, rois, labels, bbox_targets[2])
             person_id = id_labels.clone()
@@ -658,11 +663,11 @@ class DNFNet2Head(nn.Module):
                     pred_gt_index = pred_gt_matrix.argmax(dim=0)
                     pred_gt_feats = gt_feats[pred_gt_index]
 
-                    # # 1. GRU融合, gt作为input
-                    # pred_gt_feats = pred_gt_feats[:, None, :]   # [N, L, D]
-                    # pred_feats = pred_feats[:, None, :].transpose(0, 1) # [N, D] -> [N, 1, D] -> [1, N, D]
-                    # output, hn = self.gt_fused_gru(pred_gt_feats, pred_feats)   # inputs, h0
-                    # update_pred_feats = hn.squeeze(0)
+                    # 1. GRU融合, gt作为input
+                    pred_gt_feats = pred_gt_feats[:, None, :]   # [N, L, D]
+                    pred_feats = pred_feats[:, None, :].transpose(0, 1) # [N, D] -> [N, 1, D] -> [1, N, D]
+                    output, hn = self.gt_fused_gru(pred_gt_feats, pred_feats)   # inputs, h0
+                    update_pred_feats = hn.squeeze(0)
 
                     # 2. GRU融合, gt作为hidden state
                     # pred_gt_feats = pred_gt_feats[:, None, :].transpose(0, 1)
@@ -670,13 +675,13 @@ class DNFNet2Head(nn.Module):
                     # output, hn = self.gt_fused_gru(pred_feats, pred_gt_feats)   # inputs, h0
                     # update_pred_feats = output.squeeze(1)
                     
-                    # 3. attention融合
-                    pred_gt_feats = pred_gt_feats[:, None, :]   # [N, 1, D] -> [1, N, D]
-                    pred_feats = pred_feats[:, None, :] # [N, 1, D] -> [1, N, D]
-                    update_pred_feats = self.mha(pred_feats, pred_gt_feats, pred_gt_feats)
-                    update_pred_feats = update_pred_feats.squeeze(1)
-                    # update_pred_feats = self.transformer_decoder(pred_gt_feats, pred_feats)   # tgt:解码器的序列; memory:编码器最后一层的序列;
-                    # update_pred_feats = update_pred_feats.squeeze(0)
+                    # # 3. attention融合
+                    # pred_gt_feats = pred_gt_feats[:, None, :]   # [N, 1, D] -> [1, N, D]
+                    # pred_feats = pred_feats[:, None, :] # [N, 1, D] -> [1, N, D]
+                    # update_pred_feats = self.mha(pred_feats, pred_gt_feats, pred_gt_feats)
+                    # update_pred_feats = update_pred_feats.squeeze(1)
+                    # # update_pred_feats = self.transformer_decoder(pred_gt_feats, pred_feats)   # tgt:解码器的序列; memory:编码器最后一层的序列;
+                    # # update_pred_feats = update_pred_feats.squeeze(0)
                     fused_pred_feats.append(update_pred_feats)
                     
                 else:   # 有预测但是没有gt

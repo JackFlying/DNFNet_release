@@ -215,7 +215,7 @@ class HybridMemoryMultiFocalPercent(nn.Module):
         
         
         if testing == True:
-            self.num_memory = 1000
+            self.num_memory = 500
 
         #for mutli focal
         self.top_percent = top_percent
