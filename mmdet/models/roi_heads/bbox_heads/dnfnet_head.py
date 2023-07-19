@@ -29,7 +29,7 @@ class DNFNetHead(nn.Module):
                  with_reg=True,
                  roi_feat_size=7,
                  in_channels=256,
-                 num_classes=80,    # 1
+                 num_classes=80,
                  bbox_coder=dict(
                      type='DeltaXYWHBBoxCoder',
                      target_means=[0., 0., 0., 0.],
@@ -44,40 +44,23 @@ class DNFNetHead(nn.Module):
                      type='SmoothL1Loss', beta=1.0, loss_weight=1.0),
                  loss_reid=dict(loss_weight=1.0),
                  rcnn_bbox_bn=False,
-                 id_num=55272,
+                 id_num = 55272,
                  testing=False,
-                 instance_top_percent=1.,
                  cluster_top_percent=0.1,
                  temperature=0.05,
                  momentum=0.2,
-                 use_cluster_hard_loss=True,
-                 use_instance_hard_loss=False,
-                 use_IoU_loss=False,
-                 use_IoU_memory=False,
-                 IoU_loss_clip=[0.7, 1.0],
                  IoU_memory_clip=[0.2, 0.9],
-                 IoU_momentum=0.1,
-                 use_part_feat=False,
-                 use_uncertainty_loss=False,
-                 use_hybrid_loss=False,
+                 use_cluster_hard_loss=True,
                  use_quaduplet_loss=True,
-                 use_instance_loss=True,
-                 use_inter_loss=False,
-                 use_max_IoU_bbox=False,
-                 co_learning=False,
-                 use_bn_affine=False,
-                 seperate_norm=False,
+                 use_part_feat=False,
                  update_method=None,
-                 co_learning_weight=0.5,
-                 use_hard_mining=False,
-                 global_weight=0.9,
-                 triplet_weight=1,
                  num_features=256,
-                 margin=0.3,
+                 triplet_weight=1,
+                #  no_bg=False,
+                #  no_bg_triplet=False,
                  triplet_bg_weight=0.25,
-                 triplet_instance_weight=1,
-                 gfn_config=None,
-                 norm_type='l2norm'):
+                 use_deform=True
+                 ):
         super(DNFNetHead, self).__init__()
         assert with_cls or with_reg
         self.with_avg_pool = with_avg_pool
@@ -90,31 +73,29 @@ class DNFNetHead(nn.Module):
         self.reg_class_agnostic = reg_class_agnostic
         self.reg_decoded_bbox = reg_decoded_bbox
         self.fp16_enabled = False
+        self.coefficient_kl = 0.1
 
         self.bbox_coder = build_bbox_coder(bbox_coder)
         self.loss_cls = build_loss(loss_cls)
         self.loss_bbox = build_loss(loss_bbox)
-        self.loss_reid = HybridMemoryMultiFocalPercentDnfnet(num_features, id_num, temp=temperature, momentum=momentum, testing=testing, cluster_top_percent=cluster_top_percent, \
-                                                        instance_top_percent=instance_top_percent, use_cluster_hard_loss=use_cluster_hard_loss,
-                                                        use_instance_hard_loss=use_instance_hard_loss, use_hybrid_loss=use_hybrid_loss, use_IoU_loss=use_IoU_loss, \
-                                                        use_IoU_memory=use_IoU_memory, IoU_loss_clip=IoU_loss_clip, IoU_memory_clip=IoU_memory_clip, \
-                                                        IoU_momentum=IoU_momentum, use_uncertainty_loss=use_uncertainty_loss, update_method=update_method,
-                                                        use_part_feat=use_part_feat, co_learning=co_learning, use_hard_mining=use_hard_mining, use_max_IoU_bbox=use_max_IoU_bbox)
-        
-        self.loss_triplet = Quaduplet2Loss(margin=margin, bg_weight=triplet_bg_weight, instance_weight=triplet_instance_weight, use_IoU_loss=use_IoU_loss, \
-                                            IoU_loss_clip=IoU_loss_clip, use_uncertainty_loss=use_uncertainty_loss, use_hard_mining=use_hard_mining)
+        self.loss_reid = HybridMemoryMultiFocalPercentDnfnet(num_features, id_num, temperature, momentum, cluster_top_percent, use_cluster_hard_loss, testing,
+                                                    IoU_memory_clip, use_part_feat, update_method)
+
+        # self.loss_triplet = Quaduplet2Loss(margin=margin, bg_weight=triplet_bg_weight, instance_weight=triplet_instance_weight)
+        self.loss_triplet = Quaduplet2Loss(bg_weight=triplet_bg_weight)
         self.use_quaduplet_loss = use_quaduplet_loss
         self.reid_loss_weight = loss_reid['loss_weight']
         self.triplet_weight = triplet_weight
-        self.use_instance_loss = use_instance_loss
-        self.use_inter_loss = use_inter_loss
-        self.global_weight = global_weight
-        self.co_learning = co_learning
-        self.co_learning_weight = co_learning_weight
-        self.use_gfn = gfn_config['use_gfn']
-        self.norm_type = norm_type   # ['l2norm', 'protonorm', 'batchnorm']
-        self.use_bn_affine = use_bn_affine
-        self.seperate_norm = seperate_norm
+        # self.use_instance_loss = use_instance_loss
+        # self.use_inter_loss = use_inter_loss
+        # self.global_weight = global_weight
+        # self.co_learning = co_learning
+        # self.co_learning_weight = co_learning_weight
+        # self.use_gfn = gfn_config['use_gfn']
+        self.norm_type = "l2norm"   # ['l2norm', 'protonorm', 'batchnorm']
+        # self.use_bn_affine = use_bn_affine
+        # self.seperate_norm = seperate_norm
+        self.part_nums = 2
         in_channels = self.in_channels
         
         if self.with_avg_pool:
@@ -149,31 +130,31 @@ class DNFNetHead(nn.Module):
             self.bgnormalize_part = nn.ModuleList([nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine), \
                                     nn.BatchNorm1d(num_features=256, affine=self.use_bn_affine)])
     
-        self.id_part_feature = nn.ModuleList([nn.Linear(in_channels, 128), nn.Linear(in_channels, 128)])
-        self.id_part_feature1 = nn.ModuleList([nn.Linear(in_channels // 2, 128), nn.Linear(in_channels // 2, 128)])
+        self.id_part_feature = nn.ModuleList([nn.Linear(in_channels, 128) for _ in range(self.part_nums)])
+        self.id_part_feature1 = nn.ModuleList([nn.Linear(in_channels // 2, 128) for _ in range(self.part_nums)])
     
         self.proposal_score_max = False
         # # Gallery-Filter Network
-        if self.use_gfn:
-            # self.scene_feature = nn.Linear(in_channels // 2, 1024)
-            # self.scene_feature1 = nn.Linear(in_channels, 1024)
-            self.query_feature = nn.Linear(in_channels, 1024)
-            self.query_feature1 = nn.Linear(in_channels // 2, 1024)
-            ## Build Gallery Filter Network
-            self.gfn = GalleryFilterNetwork(
-                mode=gfn_config['gfn_mode'],
-                gfn_activation_mode=gfn_config['gfn_activation_mode'],
-                emb_dim=gfn_config['emb_dim'], 
-                temp=gfn_config['gfn_train_temp'], 
-                se_temp=gfn_config['gfn_se_temp'],
-                filter_neg=gfn_config['gfn_filter_neg'],
-                use_image_lut=gfn_config['gfn_use_image_lut'],
-                gfn_query_mode=gfn_config['gfn_query_mode'],
-                pos_num_sample=gfn_config['gfn_num_sample'][0], 
-                neg_num_sample=gfn_config['gfn_num_sample'][1],
-            )
-        else:
-            self.gfn = None
+        # if self.use_gfn:
+        #     # self.scene_feature = nn.Linear(in_channels // 2, 1024)
+        #     # self.scene_feature1 = nn.Linear(in_channels, 1024)
+        #     self.query_feature = nn.Linear(in_channels, 1024)
+        #     self.query_feature1 = nn.Linear(in_channels // 2, 1024)
+        #     ## Build Gallery Filter Network
+        #     self.gfn = GalleryFilterNetwork(
+        #         mode=gfn_config['gfn_mode'],
+        #         gfn_activation_mode=gfn_config['gfn_activation_mode'],
+        #         emb_dim=gfn_config['emb_dim'], 
+        #         temp=gfn_config['gfn_train_temp'], 
+        #         se_temp=gfn_config['gfn_se_temp'],
+        #         filter_neg=gfn_config['gfn_filter_neg'],
+        #         use_image_lut=gfn_config['gfn_use_image_lut'],
+        #         gfn_query_mode=gfn_config['gfn_query_mode'],
+        #         pos_num_sample=gfn_config['gfn_num_sample'][0], 
+        #         neg_num_sample=gfn_config['gfn_num_sample'][1],
+        #     )
+        # else:
+        #     self.gfn = None
 
     def gfn_forward(self, scene_emb, query_emb, labels):
         id_labels, image_id,  person_id = labels[:, 1], labels[:, 2], labels[:, 3]
@@ -237,17 +218,16 @@ class DNFNetHead(nn.Module):
             nn.init.constant_(self.id_part_feature[i].bias, 0)
             nn.init.normal_(self.id_part_feature1[i].weight, 0, 0.001)
             nn.init.constant_(self.id_part_feature1[i].bias, 0)
-        if self.use_gfn:
-            # nn.init.normal_(self.scene_feature.weight, 0, 0.001)
-            # nn.init.constant_(self.scene_feature.bias, 0)
-            # nn.init.normal_(self.scene_feature1.weight, 0, 0.001)
-            # nn.init.constant_(self.scene_feature1.bias, 0) 
-            nn.init.normal_(self.query_feature.weight, 0, 0.001)
-            nn.init.constant_(self.query_feature.bias, 0)
-            nn.init.normal_(self.query_feature1.weight, 0, 0.001)
-            nn.init.constant_(self.query_feature1.bias, 0) 
-
-        
+        # if self.use_gfn:
+        #     # nn.init.normal_(self.scene_feature.weight, 0, 0.001)
+        #     # nn.init.constant_(self.scene_feature.bias, 0)
+        #     # nn.init.normal_(self.scene_feature1.weight, 0, 0.001)
+        #     # nn.init.constant_(self.scene_feature1.bias, 0) 
+        #     nn.init.normal_(self.query_feature.weight, 0, 0.001)
+        #     nn.init.constant_(self.query_feature.bias, 0)
+        #     nn.init.normal_(self.query_feature1.weight, 0, 0.001)
+        #     nn.init.constant_(self.query_feature1.bias, 0) 
+      
     @auto_fp16()
     def crop_forward(self, crop_feats1, crop_feats2):
         crop_feat1 = crop_feats1.squeeze(-1).squeeze(-1)
@@ -331,17 +311,6 @@ class DNFNetHead(nn.Module):
             id_labels = labels[:, 1]
         
         id_feat1, id_feat2 = self.id_feature(x), self.id_feature1(x1)
-        # id_pred = []
-        # if self.use_dropout:
-        #     if self.training == True:
-        #         # self.dropout.train()
-        #         for i in range(self.MC_times):
-        #             id_feat1, id_feat2 = self.dropout(id_feat1), self.dropout(id_feat2)
-        #             id_pred_ = F.normalize(torch.cat((id_feat1, id_feat2), axis=1))
-        #             id_pred.append(id_pred_)
-        #         id_pred = torch.stack(id_pred, dim=1)
-        #     else:
-        # id_feat1, id_feat2 = self.dropout(id_feat1), self.dropout(id_feat2)
         id_pred = F.normalize(torch.cat((id_feat1, id_feat2), axis=1))
 
         if self.norm_type in ['protonorm', 'batchnorm']:
@@ -353,10 +322,9 @@ class DNFNetHead(nn.Module):
                 id_pred = torch.cat((id_feat1, id_feat2), axis=1)
                 id_pred = self.normalize(id_pred)
         
-
         scene_embed, query_embed = None, None
-        if self.use_gfn:
-            query_embed = F.normalize(torch.cat((self.query_feature(x), self.query_feature1(x1)), axis=1))
+        # if self.use_gfn:
+            # query_embed = F.normalize(torch.cat((self.query_feature(x), self.query_feature1(x1)), axis=1))
             # scene_embed = F.normalize(torch.cat((self.scene_feature(scene_emb1), self.scene_feature1(scene_emb2)), axis=1))
 
         part_id_pred = None
@@ -367,8 +335,6 @@ class DNFNetHead(nn.Module):
                 part_feat1 = part_feat1.view(part_feat1.size(0), -1)
                 part_feat = part_feat.view(part_feat.size(0), -1)
                 id_part_feat1, id_part_feat2 = self.id_part_feature[i](part_feat), self.id_part_feature1[i](part_feat1)
-                if self.use_dropout:
-                    id_part_feat1, id_part_feat2 = self.dropout(id_part_feat1), self.dropout(id_part_feat2)
                 if self.norm_type in ['protonorm', 'batchnorm']:
                     if self.training:
                         id_feat = torch.cat((id_part_feat1, id_part_feat2), axis=1)
@@ -379,7 +345,8 @@ class DNFNetHead(nn.Module):
                         id_feat = self.normalize_part[i](id_feat)
                 id_feat = F.normalize(torch.cat((id_part_feat1, id_part_feat2), axis=1))
                 part_id_pred.append(id_feat)
-            part_id_pred = torch.cat(part_id_pred, dim=1)   # [N, 512]
+            part_id_pred = torch.stack(part_id_pred, dim=1) # [N, part_nums, D]
+            part_id_pred = torch.mean(part_id_pred, dim=1)  # [N, D]
         return cls_score, bbox_pred, id_pred, part_id_pred, scene_embed, query_embed
 
 
@@ -580,7 +547,7 @@ class DNFNetHead(nn.Module):
                 IoU = torchvision.ops.box_iou(pos_bbox_pred, pos_bbox_targets)
                 top_IoU = torchvision.ops.box_iou(top_pos_bbox_pred, top_pos_bbox_targets)
                 bottom_IoU = torchvision.ops.box_iou(bottom_pos_bbox_pred, bottom_pos_bbox_targets)
-                # import ipdb;    ipdb.set_trace()
+                
                 dialog = torch.eye(IoU.shape[0]).bool().cuda()
                 IoU = IoU[dialog]
                 top_IoU = top_IoU[dialog]
@@ -590,20 +557,13 @@ class DNFNetHead(nn.Module):
                 losses['loss_bbox'] = bbox_pred.sum() * 0
                 IoU = torch.zeros(0).cuda()
 
-        # import ipdb;    ipdb.set_trace()
         rid_pred = id_pred[id_labels!=-2]
         rid_labels = id_labels[id_labels!=-2]
-
         rpart_feats = part_feats[id_labels!=-2]
-        memory_loss = self.loss_reid(rid_pred, rid_labels, IoU, rpart_feats, top_IoU, bottom_IoU, pos_is_gt_list)
-        memory_loss['global_cluster_hard_loss'] *= self.global_weight
-        memory_loss["part_cluster_hard_loss"] *= (1 - self.global_weight)
         
-        # if self.co_learning:
-        #     memory_loss['global_cluster_hard_loss2'] *= self.global_weight
-        #     memory_loss["part_cluster_hard_loss2"] *= (1 - self.global_weight)
-        #     memory_loss['global_cluster_hard_loss2'] *= self.co_learning_weight
-        #     memory_loss['part_cluster_hard_loss2'] *= self.co_learning_weight
+        memory_loss = self.loss_reid(rid_pred, rpart_feats, rid_labels, IoU, top_IoU, bottom_IoU)
+        memory_loss['global_cluster_loss'] *= self.reid_loss_weight
+        memory_loss["part_cluster_loss"] *= self.reid_loss_weight
 
         losses.update(memory_loss)
 
@@ -611,35 +571,7 @@ class DNFNetHead(nn.Module):
             cluster_id_labels = self.loss_reid.get_cluster_ids(id_labels[id_labels != -2])
             new_id_labels = id_labels.clone()
             new_id_labels[id_labels != -2] = cluster_id_labels
-            losses['global_triplet_loss'] = self.loss_triplet(id_pred, new_id_labels, id_labels, IoU) * self.triplet_weight
-
-            # if self.co_learning:
-            #     cluster_id_label2s = self.loss_reid.get_cluster_id2s(id_labels[id_labels != -2])
-            #     new_id_label2s = id_labels.clone()
-            #     new_id_label2s[id_labels != -2] = cluster_id_label2s
-            #     losses['global_triplet_loss2'] = self.loss_triplet(id_pred, new_id_label2s, rid_labels, IoU) * self.triplet_weight
-            #     losses['global_triplet_loss2'] *= self.co_learning_weight
-
-            # bottom_triplet_loss = self.loss_triplet(part_feats[:, :256], new_id_labels, rid_labels, IoU) * self.triplet_weight
-            # top_triplet_loss = self.loss_triplet(part_feats[:, 256:], new_id_labels, rid_labels, IoU) * self.triplet_weight
-
-            # losses['part_triplet_loss'] = bottom_triplet_loss + top_triplet_loss
-            # losses['global_triplet_loss'] *= self.global_weight
-            # losses['part_triplet_loss'] *= (1 - self.global_weight)
-
-        if self.use_instance_loss:
-            rid_pred = F.normalize(id_pred[id_labels!=-2], dim=-1)
-            pos_crop_targets = F.normalize(pos_crop_targets, dim=-1)
-            cos_instance = torch.cosine_similarity(rid_pred, pos_crop_targets, dim=-1)
-            losses['loss_instance'] = (1 - cos_instance).mean()
-        
-        if self.use_inter_loss:
-            rid_pred = F.normalize(rid_pred, dim=-1)
-            pos_crop_targets = F.normalize(pos_crop_targets, dim=-1)
-            crop_distribution = rid_pred.mm(rid_pred.t())
-            pred_distribution = pos_crop_targets.mm(pos_crop_targets.t())
-            losses['loss_inter'] = F.kl_div(crop_distribution.softmax(dim=-1).log(), pred_distribution.softmax(dim=-1), reduction='sum') + \
-                                    F.kl_div(pred_distribution.softmax(dim=-1).log(), crop_distribution.softmax(dim=-1), reduction='sum')
+            losses['global_triplet_loss'] = self.loss_triplet(id_pred, new_id_labels) * self.triplet_weight
 
         return losses
 

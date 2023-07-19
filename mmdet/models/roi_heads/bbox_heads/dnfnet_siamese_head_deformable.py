@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.modules.utils import _pair
+import torchvision
 
 from mmcv.cnn import Scale, normal_init
 from mmcv.cnn import ConvModule, bias_init_with_prob, normal_init
@@ -11,11 +12,11 @@ from mmdet.core import (auto_fp16, build_bbox_coder, force_fp32, multi_apply,
                         multiclass_nms, multiclass_nms_aug)
 from mmdet.models.builder import HEADS, build_loss
 from mmdet.models.losses import accuracy
-from mmdet.models.utils import HybridMemoryMultiFocalPercent, Quaduplet2Loss, HybridMemoryMultiFocalPercentClusterUnlabeled
+from mmdet.models.utils import HybridMemoryMultiFocalPercent, Quaduplet2Loss, HybridMemoryMultiFocalPercentDnfnet
 from mmcv.ops import DeformConv2dPack
 
 @HEADS.register_module()
-class DNFNetDICLHead(nn.Module):
+class DNFNetSiameseHeadDeformable(nn.Module):
     '''for person search, output reid features'''
     """Simplest RoI head, with only two fc layers for classification and
     regression respectively."""
@@ -43,20 +44,16 @@ class DNFNetDICLHead(nn.Module):
                  rcnn_bbox_bn=False,
                  id_num = 55272,
                  testing=False,
-                 instance_top_percent=1.,
                  cluster_top_percent=0.1,
                  temperature=0.05,
                  momentum=0.2,
+                 IoU_memory_clip=[0.2, 0.9],
                  use_cluster_hard_loss=True,
-                 cluster_mean_method='naive',
-                 tc_winsize=500,
-                 intra_cluster_T=0.1,
-                 use_part_feat=False,
                  use_quaduplet_loss=True,
-                 use_max_IoU_bbox=False,
+                 use_part_feat=False,
                  update_method=None,
-                 triplet_weight=1,
                  num_features=256,
+                 triplet_weight=1,
                  no_bg=False,
                  no_bg_triplet=False,
                  triplet_bg_weight=0.25,
@@ -72,7 +69,7 @@ class DNFNetDICLHead(nn.Module):
                  feature_w=6,
                  use_deform=True
                  ):
-        super(DNFNetDICLHead, self).__init__()
+        super(DNFNetSiameseHeadDeformable, self).__init__()
         assert with_cls or with_reg
         self.with_avg_pool = with_avg_pool
         self.with_cls = with_cls
@@ -84,14 +81,14 @@ class DNFNetDICLHead(nn.Module):
         self.reg_class_agnostic = reg_class_agnostic
         self.reg_decoded_bbox = reg_decoded_bbox
         self.fp16_enabled = False
-        self.momentum = momentum
 
 
         self.bbox_coder = build_bbox_coder(bbox_coder)
         self.loss_cls = build_loss(loss_cls)
         self.loss_bbox = build_loss(loss_bbox)
-        self.loss_reid = HybridMemoryMultiFocalPercentClusterUnlabeled(num_features, id_num, temperature, momentum, cluster_top_percent, instance_top_percent, use_cluster_hard_loss, testing, \
-                                                        use_part_feat, use_max_IoU_bbox, update_method, cluster_mean_method, tc_winsize, intra_cluster_T)
+        self.loss_reid = HybridMemoryMultiFocalPercentDnfnet(num_features, id_num, temperature, momentum, cluster_top_percent, use_cluster_hard_loss, testing,
+                                                    IoU_memory_clip, use_part_feat, update_method)
+        # self.loss_reid = HybridMemoryMultiFocalPercent(256, id_num, top_percent=cluster_top_percent, momentum=momentum, testing=testing)
         
         self.loss_triplet = Quaduplet2Loss(bg_weight=triplet_bg_weight)
         self.use_quaduplet_loss = use_quaduplet_loss
@@ -170,6 +167,7 @@ class DNFNetDICLHead(nn.Module):
         self.feature_h = feature_h
         self.feature_w = feature_w
         self.fc_reid = nn.Linear(in_channels * self.feature_h * self.feature_w, 256)  ###
+        self.fc_reid_part = nn.Linear(in_channels * self.feature_h * self.feature_w // 2, 256)  ###
 
 
     def init_weights(self):
@@ -191,17 +189,20 @@ class DNFNetDICLHead(nn.Module):
 
 
     @auto_fp16()
-    def forward(self, x, gt_x=None, sampling_results=None):
+    def forward(self, x, gt_x_list=None, sampling_results=None):
         """
             x: [N, 1024, 14, 6]
             gt_x: [N, 1024, 14, 6]
+            gt_x_list: [global, bottom, top]
         """
-        # import ipdb;    ipdb.set_trace()
+
         if self.use_deform: # 形状不变
             x = self.deform_conv(x)
-            if gt_x is not None:
-                gt_x = self.deform_conv(gt_x)
-               
+            if gt_x_list is not None:
+                gt_x_list = [self.deform_conv(gt_x) for gt_x in gt_x_list]
+
+        x_parts_list = [x[:, :, i*self.feature_h//2:(i+1)*self.feature_h//2, :] for i in range(2)]  # [bottom, top]
+
         cls_feat = x
         reg_feat = x
 
@@ -216,30 +217,38 @@ class DNFNetDICLHead(nn.Module):
         bbox_pred = self.fc_reg(reg_feat)   # [N, 4]
 
         x_reid = x
+
         if self.flag_reid_fc:
-            if gt_x is not None:
+            if gt_x_list is not None:
                 id_pred = F.normalize(self.fc_reid(x_reid.view(x_reid.size(0), -1)))
-                gt_id_pred = F.normalize(self.fc_reid(gt_x.view(gt_x.size(0), -1)))
+                id_pred_part_list = [F.normalize(self.fc_reid_part(x_part.reshape(x_part.size(0), -1))) for x_part in x_parts_list]
+                gt_id_pred_list = [F.normalize(self.fc_reid(gt_x.view(gt_x.size(0), -1))) for gt_x in gt_x_list]
             else:
                 id_pred = F.normalize(self.fc_reid(x_reid.view(x_reid.size(0), -1)))
-                gt_id_pred = None
-        else:
-            if gt_x is not None:
-                x_reid = F.adaptive_max_pool2d(x_reid, (1, 1)).view(x_reid.size(0), -1)#adaptive_avg_pool2d
-                x_reid = self.id_feature(x_reid)
-                gt_x = F.adaptive_max_pool2d(gt_x, (1, 1)).view(gt_x.size(0), -1)
-                gt_x = self.id_feature(gt_x)
-                id_pred = F.normalize(x_reid)
-                gt_id_pred = F.normalize(gt_x)
-            else:
-                x_reid = F.adaptive_max_pool2d(x_reid, (1, 1)).view(x_reid.size(0), -1)
-                x_reid = self.id_feature(x_reid)
-                id_pred = F.normalize(x_reid)
-                gt_id_pred = None
+                gt_id_pred_list = None
+        # else:
+        #     if gt_x_list is not None:
+        #         x_reid = F.adaptive_max_pool2d(x_reid, (1, 1)).view(x_reid.size(0), -1)#adaptive_avg_pool2d
+        #         x_reid = self.id_feature(x_reid)
+        #         gt_x = F.adaptive_max_pool2d(gt_x, (1, 1)).view(gt_x.size(0), -1)
+        #         gt_x = self.id_feature(gt_x)
+        #         id_pred = F.normalize(x_reid)
+        #         gt_id_pred = F.normalize(gt_x)
+        #     else:
+        #         x_reid = F.adaptive_max_pool2d(x_reid, (1, 1)).view(x_reid.size(0), -1)
+        #         x_reid = self.id_feature(x_reid)
+        #         id_pred = F.normalize(x_reid)
+        #         gt_id_pred = None
+        
         if not self.training:
-            if gt_id_pred is not None:
-                id_pred = (id_pred + gt_id_pred) / 2
-        return cls_score, bbox_pred, id_pred, gt_id_pred
+            if gt_id_pred_list is not None:
+                # gt + pred
+                id_pred = (id_pred + gt_id_pred_list[0]) / 2
+                id_pred_part_list[0] = (id_pred_part_list[0] + gt_id_pred_list[1]) / 2  # bottom
+                id_pred_part_list[1] = (id_pred_part_list[1] + gt_id_pred_list[2]) / 2  # top
+        id_pred_part = torch.stack(id_pred_part_list, dim=0).mean(0)
+        return cls_score, bbox_pred, id_pred, id_pred_part, gt_id_pred_list, id_pred_part_list
+
 
     def _get_target_single(self, pos_bboxes, neg_bboxes, pos_gt_bboxes,
                            pos_gt_labels, cfg):
@@ -260,6 +269,7 @@ class DNFNetDICLHead(nn.Module):
         labels[:, 1] = -2
         label_weights = pos_bboxes.new_zeros(num_samples)
         bbox_targets = pos_bboxes.new_zeros(num_samples, 4)
+        bbox_targets_xywh = pos_bboxes.new_zeros(num_samples, 4)
         bbox_weights = pos_bboxes.new_zeros(num_samples, 4)
         if num_pos > 0:
             # import ipdb;    ipdb.set_trace()
@@ -272,11 +282,12 @@ class DNFNetDICLHead(nn.Module):
             else:
                 pos_bbox_targets = pos_gt_bboxes
             bbox_targets[:num_pos, :] = pos_bbox_targets
+            bbox_targets_xywh[:num_pos, :] = pos_gt_bboxes
             bbox_weights[:num_pos, :] = 1
         if num_neg > 0:
             label_weights[-num_neg:] = 1.0
 
-        return labels, label_weights, bbox_targets, bbox_weights
+        return labels, label_weights, bbox_targets, bbox_weights, bbox_targets_xywh
 
     def get_targets(self,
                     sampling_results,
@@ -288,7 +299,7 @@ class DNFNetDICLHead(nn.Module):
         neg_bboxes_list = [res.neg_bboxes for res in sampling_results]
         pos_gt_bboxes_list = [res.pos_gt_bboxes for res in sampling_results]
         pos_gt_labels_list = [res.pos_gt_labels for res in sampling_results]
-        labels, label_weights, bbox_targets, bbox_weights = multi_apply(
+        labels, label_weights, bbox_targets, bbox_weights, bbox_targets_xywh = multi_apply(
             self._get_target_single,
             pos_bboxes_list,
             neg_bboxes_list,
@@ -301,14 +312,17 @@ class DNFNetDICLHead(nn.Module):
             label_weights = torch.cat(label_weights, 0)  ###256
             bbox_targets = torch.cat(bbox_targets, 0)  ###256*4
             bbox_weights = torch.cat(bbox_weights, 0)  ###256*4
-        return labels, label_weights, bbox_targets, bbox_weights
+            bbox_targets_xywh = torch.cat(bbox_targets_xywh, 0)
+        return labels, label_weights, bbox_targets, bbox_weights, bbox_targets_xywh
 
-    @force_fp32(apply_to=('cls_score', 'bbox_pred', 'id_pred', 'gt_id_pred'))
+    @force_fp32(apply_to=('cls_score', 'bbox_pred', 'id_pred', 'gt_id_pred_list', 'id_pred_part_list'))
     def loss(self,
              cls_score,
              bbox_pred,
              id_pred,
-             gt_id_pred,
+             id_pred_part,
+             gt_id_pred_list,
+             id_pred_part_list,
              sampling_results,
              gt_labels,
              rois,
@@ -316,64 +330,11 @@ class DNFNetDICLHead(nn.Module):
              label_weights,
              bbox_targets,
              bbox_weights,
+             bbox_targets_xywh,
              reduction_override=None):
         id_labels = labels[:, 1]
         labels = labels[:, 0]
         losses = dict()
-
-        #######pospos########
-        # pos_id_pred = id_pred[id_labels != -2]
-        # mean_id_pred = (pos_id_pred + gt_id_pred) / 2
-        #####################
-        batch_size = len(sampling_results)
-        l_nums_pos = list(len(sam.pos_bboxes) for sam in sampling_results)  # 正样本的个数
-        acc_nums_sam = list(accumulate((len(sam.pos_bboxes) + len(sam.neg_bboxes)) for sam in sampling_results))    # 全部样本
-        acc_nums_sam.append(0)
-        acc_nums_gt = list(accumulate(sam.num_gts for sam in sampling_results)) # gt的个数
-        acc_nums_gt.append(0)
-        batch_gt_id_pred = list(gt_id_pred[acc_nums_gt[i-1]:acc_nums_gt[i], :] for i in range(batch_size))
-
-        mean_id_pred = []
-        gt_list_as_pos = []
-        pos_id_pred = []
-        new_id_pred = id_pred.clone()
-        for i in range(batch_size):
-            # if len(sampling_results[i].pos_bboxes) + len(sampling_results[i].neg_bboxes) < 128:
-                # print('pos', len(sampling_results[i].pos_bboxes))
-                # print('neg', len(sampling_results[i].neg_bboxes))
-            _gt_list_as_pos = batch_gt_id_pred[i][sampling_results[i].pos_assigned_gt_inds] # 每个正样本对应的gt
-            gt_list_as_pos.append(_gt_list_as_pos)
-
-            _pos_id_pred = id_pred[acc_nums_sam[i - 1]: acc_nums_sam[i - 1] + l_nums_pos[i], :]
-            pos_id_pred.append(_pos_id_pred)
-
-            _mean_id_pred = (_pos_id_pred + _gt_list_as_pos) / 2
-            mean_id_pred.append(_mean_id_pred)
-
-            new_id_pred[acc_nums_sam[i - 1]: acc_nums_sam[i - 1] + l_nums_pos[i]] = _mean_id_pred
-
-        mean_id_pred = torch.cat(mean_id_pred, dim=0)
-        gt_list_as_pos = torch.cat(gt_list_as_pos, dim=0)
-        assert pos_id_pred != id_pred[id_labels != -2]
-        pos_id_pred = torch.cat(pos_id_pred, dim=0)
-
-        losses['loss_id'] = self.loss_reid(mean_id_pred, id_labels[id_labels != -2]) * self.reid_loss_weight
-        losses['loss_sim'] = self.coefficient_sim / len(pos_id_pred) * sum(
-            1 - pos_id_pred[i].unsqueeze(dim=0) @ gt_list_as_pos[i].unsqueeze(dim=1) for i in
-            range(len(mean_id_pred)))
-        sim_pred = pos_id_pred @ pos_id_pred.transpose(0, 1)
-        sim_gt = gt_list_as_pos @ gt_list_as_pos.transpose(0, 1)
-        sim_pred = F.log_softmax(sim_pred, dim=-1)
-        sim_gt = F.log_softmax(sim_gt, dim=-1)
-        losses['loss_kl'] = self.coefficient_kl * (
-                F.kl_div(sim_pred, sim_gt, log_target=True)
-                + F.kl_div(sim_gt, sim_pred, log_target=True)
-        )
-        cluster_id_labels = self.loss_reid.get_cluster_ids(id_labels[id_labels != -2])
-        new_id_labels = id_labels.clone()
-        new_id_labels[id_labels != -2] = cluster_id_labels
-        if self.use_quaduplet_loss:
-            losses['loss_triplet'] = self.loss_triplet(new_id_pred, new_id_labels) * self.triplet_weight
 
         if cls_score is not None:
             avg_factor = max(torch.sum(label_weights > 0).float().item(), 1.)
@@ -385,6 +346,7 @@ class DNFNetDICLHead(nn.Module):
                     avg_factor=avg_factor,
                     reduction_override=reduction_override)
                 losses['acc'] = accuracy(cls_score, labels)
+        
         if bbox_pred is not None:
             bg_class_ind = self.num_classes
             # 0~self.num_classes-1 are FG, self.num_classes is BG
@@ -407,25 +369,149 @@ class DNFNetDICLHead(nn.Module):
                     bbox_weights[pos_inds.type(torch.bool)],
                     avg_factor=bbox_targets.size(0),
                     reduction_override=reduction_override)
+
+                decode_pos_bbox_pred = self.bbox_coder.decode(rois[:, 1:][pos_inds.type(torch.bool)], pos_bbox_pred)
+                pos_bbox_targets = bbox_targets_xywh[pos_inds.type(torch.bool)]
+                
+                top_pos_bbox_pred = decode_pos_bbox_pred.clone()   # [x1, y1, x2, y2]
+                top_pos_bbox_pred[:, 1] = (top_pos_bbox_pred[:, 1] + top_pos_bbox_pred[:, 3]) / 2   # [x1, (y1+y2)/2, x2, y2]
+                bottom_pos_bbox_pred = decode_pos_bbox_pred.clone()
+                bottom_pos_bbox_pred[:, 3] = (bottom_pos_bbox_pred[:, 1] + bottom_pos_bbox_pred[:, 3]) / 2  # [x1, y1, x2, (y1+y2)/2]
+                
+                top_pos_bbox_targets = pos_bbox_targets.clone()
+                top_pos_bbox_targets[:, 1] = (top_pos_bbox_targets[:, 1] + top_pos_bbox_targets[:, 3]) / 2
+                bottom_pos_bbox_targets = pos_bbox_targets.clone()
+                bottom_pos_bbox_targets[:, 3] = (bottom_pos_bbox_targets[:, 1] + bottom_pos_bbox_targets[:, 3]) / 2
+
+                IoU = torchvision.ops.box_iou(decode_pos_bbox_pred, pos_bbox_targets)
+                top_IoU = torchvision.ops.box_iou(top_pos_bbox_pred, top_pos_bbox_targets)
+                bottom_IoU = torchvision.ops.box_iou(bottom_pos_bbox_pred, bottom_pos_bbox_targets)
+
+                dialog = torch.eye(IoU.shape[0]).bool().cuda()
+                IoU = IoU[dialog]
+                top_IoU = top_IoU[dialog]
+                bottom_IoU = bottom_IoU[dialog]
+
             else:
                 losses['loss_bbox'] = bbox_pred.sum() * 0
+                IoU = torch.zeros(0).cuda()
 
+        # gt
+        gt_id_pred = gt_id_pred_list[0]
+        bottom_gt_id_pred = gt_id_pred_list[1]
+        top_gt_id_pred = gt_id_pred_list[2]
+        
+        # pred
+        bottom_id_pred = id_pred_part_list[0]
+        top_id_pred = id_pred_part_list[1]
+        
+        batch_size = len(sampling_results)
+        l_nums_pos = list(len(sam.pos_bboxes) for sam in sampling_results)  # 正样本的个数
+        acc_nums_sam = list(accumulate((len(sam.pos_bboxes) + len(sam.neg_bboxes)) for sam in sampling_results))    # 全部样本
+        acc_nums_sam.append(0)
+        acc_nums_gt = list(accumulate(sam.num_gts for sam in sampling_results)) # gt的个数
+        acc_nums_gt.append(0)
+        
+        batch_gt_id_pred = list(gt_id_pred[acc_nums_gt[i-1]:acc_nums_gt[i], :] for i in range(batch_size))
+        batch_bottom_gt_id_pred = list(bottom_gt_id_pred[acc_nums_gt[i-1]:acc_nums_gt[i], :] for i in range(batch_size))
+        batch_top_gt_id_pred = list(top_gt_id_pred[acc_nums_gt[i-1]:acc_nums_gt[i], :] for i in range(batch_size))
 
+        mean_id_pred = []
+        gt_list_as_pos, bottom_gt_list_as_pos, top_gt_list_as_pos = [], [], []
+        pos_id_pred, pos_bottom_id_pred, pos_top_id_pred = [], [], []
+        new_id_pred = id_pred.clone()
+        # new_id_part_pred = id_pred_part.clone()
+        for i in range(batch_size):
+            # for gt
+            _gt_list_as_pos = batch_gt_id_pred[i][sampling_results[i].pos_assigned_gt_inds] # 每个正样本对应的gt
+            gt_list_as_pos.append(_gt_list_as_pos)
+            _bottom_gt_list_as_pos = batch_bottom_gt_id_pred[i][sampling_results[i].pos_assigned_gt_inds] # 每个正样本对应的gt
+            bottom_gt_list_as_pos.append(_bottom_gt_list_as_pos)    
+            _top_gt_list_as_pos = batch_top_gt_id_pred[i][sampling_results[i].pos_assigned_gt_inds] # 每个正样本对应的gt
+            top_gt_list_as_pos.append(_top_gt_list_as_pos)      
+            # for pred
+            _pos_id_pred = id_pred[acc_nums_sam[i - 1]: acc_nums_sam[i - 1] + l_nums_pos[i], :]
+            pos_id_pred.append(_pos_id_pred)
+            _pos_bottom_id_pred = bottom_id_pred[acc_nums_sam[i - 1]: acc_nums_sam[i - 1] + l_nums_pos[i], :]
+            pos_bottom_id_pred.append(_pos_bottom_id_pred)
+            _pos_top_id_pred = top_id_pred[acc_nums_sam[i - 1]: acc_nums_sam[i - 1] + l_nums_pos[i], :]
+            pos_top_id_pred.append(_pos_top_id_pred)
+            # for gt + pred
+            _mean_id_pred = (_pos_id_pred + _gt_list_as_pos) / 2
+            mean_id_pred.append(_mean_id_pred)
+            # for triplet
+            new_id_pred[acc_nums_sam[i - 1]: acc_nums_sam[i - 1] + l_nums_pos[i]] = _mean_id_pred
 
+        mean_id_pred = torch.cat(mean_id_pred, dim=0)
+        # gt
+        gt_list_as_pos = torch.cat(gt_list_as_pos, dim=0)
+        bottom_gt_list_as_pos = torch.cat(bottom_gt_list_as_pos, dim=0)
+        top_gt_list_as_pos = torch.cat(top_gt_list_as_pos, dim=0)
+        part_gt_list_as_pos = (bottom_gt_list_as_pos + top_gt_list_as_pos) / 2
+        # pred
+        pos_id_pred = torch.cat(pos_id_pred, dim=0)
+        pos_bottom_id_pred = torch.cat(pos_bottom_id_pred, dim=0)
+        pos_top_id_pred = torch.cat(pos_top_id_pred, dim=0)
+        pos_part_id_pred = (pos_bottom_id_pred + pos_top_id_pred) / 2
+        # gt + pred
+        # mean_bottom_id_pred = (pos_bottom_id_pred + bottom_gt_list_as_pos) / 2
+        # mean_top_id_pred = (pos_top_id_pred + top_gt_list_as_pos) / 2
+        # mean_part_id_pred_ = (mean_bottom_id_pred + mean_top_id_pred) / 2
+        mean_part_id_pred = (pos_part_id_pred + part_gt_list_as_pos) / 2
+        
+        memory_loss = self.loss_reid(mean_id_pred, mean_part_id_pred, id_labels[id_labels != -2], IoU, top_IoU, bottom_IoU)
+        memory_loss["global_cluster_loss"] *= self.reid_loss_weight
+        memory_loss["part_cluster_loss"] *= self.reid_loss_weight
+        losses.update(memory_loss)
+        
+        losses['loss_sim'] = self.cal_sim_loss(pos_id_pred, gt_list_as_pos)
+        losses['loss_kl'] = self.cal_kl_loss(pos_id_pred, gt_list_as_pos)
+        
+        losses['loss_sim_bottom'] = self.cal_sim_loss(pos_bottom_id_pred, bottom_gt_list_as_pos)
+        losses['loss_kl_bottom'] = self.cal_kl_loss(pos_bottom_id_pred, bottom_gt_list_as_pos)
+        
+        losses['loss_sim_top'] = self.cal_sim_loss(pos_top_id_pred, top_gt_list_as_pos)
+        losses['loss_kl_top'] = self.cal_kl_loss(pos_top_id_pred, top_gt_list_as_pos)
+        
+        losses['loss_sim_part'] = self.cal_sim_loss(pos_part_id_pred, part_gt_list_as_pos)
+        losses['loss_kl_part'] = self.cal_kl_loss(pos_part_id_pred, part_gt_list_as_pos)
+                
+        cluster_id_labels = self.loss_reid.get_cluster_ids(id_labels[id_labels != -2])
+        new_id_labels = id_labels.clone()
+        new_id_labels[id_labels != -2] = cluster_id_labels
+        if self.use_quaduplet_loss:
+            losses['loss_triplet'] = self.loss_triplet(new_id_pred, new_id_labels) * self.triplet_weight
+            
         return losses
 
-    @force_fp32(apply_to=('cls_score', 'bbox_pred', 'id_pred'))
+    @force_fp32(apply_to=('pos_id_pred', 'gt_list_as_pos'))
+    def cal_kl_loss(self, pos_id_pred, gt_list_as_pos):
+        sim_pred = pos_id_pred @ pos_id_pred.transpose(0, 1)
+        sim_gt = gt_list_as_pos @ gt_list_as_pos.transpose(0, 1)
+        sim_pred = F.log_softmax(sim_pred, dim=-1)
+        sim_gt = F.log_softmax(sim_gt, dim=-1)
+        return self.coefficient_kl * F.kl_div(sim_pred, sim_gt, log_target=True) + F.kl_div(sim_gt, sim_pred, log_target=True)
+
+    @force_fp32(apply_to=('pos_id_pred', 'gt_list_as_pos'))
+    def cal_sim_loss(self, pos_id_pred, gt_list_as_pos):
+        return self.coefficient_sim / len(pos_id_pred) * sum(
+                    1 - pos_id_pred[i].unsqueeze(dim=0) @ gt_list_as_pos[i].unsqueeze(dim=1) for i in
+                    range(len(pos_id_pred)))
+
+    @force_fp32(apply_to=('cls_score', 'bbox_pred', 'id_pred', 'tmp_feat'))
     def get_bboxes(self,
                    rois,
                    cls_score,
                    bbox_pred,
                    id_pred,
+                   tmp_feat,
                    img_shape,
                    scale_factor,
                    rescale=False,
                    cfg=None):
         if isinstance(cls_score, list):
             cls_score = sum(cls_score) / float(len(cls_score))
+        # 去掉测一下
         scores = F.softmax(cls_score, dim=1) if cls_score is not None else None
 
         if bbox_pred is not None:
@@ -451,14 +537,26 @@ class DNFNetDICLHead(nn.Module):
             if self.proposal_score_max:
                 scores[:, 0] = 1
                 scores[:, 1] = 0
-            det_bboxes, det_labels, det_ids = multiclass_nms_aug(bboxes, scores, [id_pred, ],
-                                                    cfg.score_thr, cfg.nms,
-                                                    cfg.max_per_img)
-            if det_ids is None:
-                det_ids = det_bboxes.new_zeros((0, id_pred.shape[1]))
+
+            if tmp_feat is None:
+                det_bboxes, det_labels, det_ids = multiclass_nms_aug(bboxes, scores, [id_pred],
+                                                        cfg.score_thr, cfg.nms,
+                                                        cfg.max_per_img)
+                if det_ids is None:
+                    det_ids = det_bboxes.new_zeros((0, 256))
+                else:
+                    det_ids = det_ids[0]
+                det_bboxes = torch.cat([det_bboxes, det_ids], dim=1)
+
             else:
-                det_ids = det_ids[0]
-            det_bboxes = torch.cat([det_bboxes, det_ids], dim=1)
+                det_bboxes, det_labels, det_ids = multiclass_nms_aug(bboxes, scores, [id_pred, tmp_feat],
+                                                        cfg.score_thr, cfg.nms,
+                                                        cfg.max_per_img)
+                if det_ids is None:
+                    det_ids, det_ids2 = det_bboxes.new_zeros((0, 256)), det_bboxes.new_zeros((0, tmp_feat.shape[-1]))
+                else:
+                    det_ids, det_ids2 = det_ids[0], det_ids[1]
+                det_bboxes = torch.cat([det_bboxes, det_ids, det_ids2], dim=1)
 
             return det_bboxes, det_labels
 

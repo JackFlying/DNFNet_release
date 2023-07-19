@@ -327,7 +327,6 @@ class AnchorHead(BaseDenseHead):
         """
         num_imgs = len(img_metas)
         assert len(anchor_list) == len(valid_flag_list) == num_imgs
-
         # anchor number of multi levels
         num_level_anchors = [anchors.size(0) for anchors in anchor_list[0]]
         # concat all level anchors to a single tensor
@@ -470,6 +469,8 @@ class AnchorHead(BaseDenseHead):
             label_channels=label_channels)
         if cls_reg_targets is None:
             return None
+        
+        # import ipdb;    ipdb.set_trace()
         (labels_list, label_weights_list, bbox_targets_list, bbox_weights_list,
          num_total_pos, num_total_neg) = cls_reg_targets
         num_total_samples = (

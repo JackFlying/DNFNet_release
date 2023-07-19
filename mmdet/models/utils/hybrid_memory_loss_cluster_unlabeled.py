@@ -206,6 +206,7 @@ class HM(autograd.Function):
             grad_inputs = grad_outputs.mm(ctx.cluster_mean)
 
         IoU = torch.clamp(IoU, min=ctx.IoU_memory_clip[0], max=ctx.IoU_memory_clip[1])
+
         for x, y, iou, uf, tg in zip(inputs, indexes, IoU, ctx.update_flag, ctx.targets):
             if ctx.update_method == "momentum":
                 ctx.features[y] = ctx.momentum * ctx.features[y] + (1.0 - ctx.momentum) * x
@@ -303,9 +304,9 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
         #   for mutli focal
         self.positive_top_percent = 0.1    # 数值越大，难样本比例越大
         self.cluster_top_percent = cluster_top_percent
-        self.instance_top_percent = instance_top_percent
+        # self.instance_top_percent = instance_top_percent
         self.use_max_IoU_bbox = use_max_IoU_bbox
-        self.iou_threshold = 0.
+        # self.iou_threshold = 0.
         self.cluster_mean_method = cluster_mean_method
 
         self.idx = torch.zeros(num_memory).long()
@@ -424,19 +425,13 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
         nums.index_add_(0, labels, torch.ones(self.num_memory, 1).float().cuda()) # [C], 求每一个簇样本个数
         mask = (nums > 0).float()
         sim = sim.t()
-
-        # # 对正负样本的选择
-        # cluster_outlier = torch.load(os.path.join('saved_file', 'cluster_outlier.pth')).cuda()    # [N]
-        # sim = sim[cluster_outlier == False]
-        # mask = mask[cluster_outlier == False]
         
         mask = mask.expand_as(sim)
         masked_sim = self.masked_softmax_multi_focal(sim.t().contiguous(), mask.t().contiguous(), targets=targets) # sim: u * B, mask:u * B, masked_sim: B * u
         cluster_hard_loss = F.nll_loss(torch.log(masked_sim + 1e-6), targets, reduce=False)
-        # import ipdb;    ipdb.set_trace()
-        # sample_outlier = torch.load(os.path.join('saved_file', 'sample_outlier.pth')).cuda()    # [N]
-        # batch_outlier = sample_outlier[indexes]
-        # cluster_hard_loss = cluster_hard_loss[batch_outlier == True]
+        # ratio = torch.load(os.path.join('saved_file', 'ratio.pth')).cuda()    # [N]
+        # ratio_batch = ratio[indexes]
+        # cluster_hard_loss = cluster_hard_loss * ratio_batch
         cluster_hard_loss = cluster_hard_loss.mean()
         
         return cluster_hard_loss
@@ -605,7 +600,7 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
         m2o_loss /= len(proposals_nums)
         return m2o_loss
 
-    def forward(self, feats, indexes, IoU, part_feats, top_IoU, bottom_IoU, pos_is_gt_list):
+    def forward(self, feats, indexes, IoU, top_IoU, bottom_IoU, part_feats=None):
         """
             :feats: [B, 256]
             :indexes: [B, ]
@@ -614,7 +609,7 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
         self.clock += 1
         self.tflag[indexes] = self.clock
         feats = F.normalize(feats, p=2, dim=1)
-        
+
         update_flag, iou_target = self.get_update_flag(indexes, IoU)
         top_update_flag, top_iou_target = self.get_update_flag(indexes, top_IoU)
         bottom_update_flag, bottom_iou_target = self.get_update_flag(indexes, bottom_IoU)
@@ -633,9 +628,6 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
         else:
             inputs = hm(feats, indexes, labels, self.features, self.cluster_mean, self.tflag, IoU, self.update_method, self.momentum, update_flag, self.IoU_memory_clip, \
                         targets, self.clock, self.cluster_mean_method, self.tc_winsize, self.intra_cluster_T)   # [B, N]
-            # self_sim = feats.mm(feats.t())
-            # one_hot_pos = torch.nn.functional.one_hot(targets, num_classes=self.labels.shape[0])
-            # inputs[one_hot_pos == 1] = self_sim.diag()
             inputs /= self.temp
 
         if self.use_max_IoU_bbox:
@@ -650,27 +642,16 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
             global_targets, bottom_targets, top_targets = targets.clone(), targets.clone(), targets.clone()
             global_indexes, bottom_indexes, top_indexes = indexes.clone(), indexes.clone(), indexes.clone()
         
-        # sample_outlier = torch.load(os.path.join('saved_file', 'sample_outlier.pth')).cuda()    # [N]
-        # batch_outlier = sample_outlier[indexes]
-        # inputs = inputs[batch_outlier == False]
-        # global_targets = global_targets[batch_outlier == False]
         
         if self.use_cluster_hard_loss:
             losses["global_cluster_hard_loss"] = torch.tensor(0.)
-            losses["global_cluster_hard_loss_unlabel"] = torch.tensor(0.)
-            losses["part_cluster_hard_loss"] = torch.tensor(0.)
             
             if global_targets.shape[0] > 0:
                 losses["global_cluster_hard_loss"] = self.get_hard_cluster_loss_cluster_label(labels.clone(), inputs, global_targets, indexes)
-                
-            # if global_targets[batch_outlier == False].shape[0] > 0:
-            #     losses["global_cluster_hard_loss"] = self.get_hard_cluster_loss_cluster_label(labels.clone(), inputs[batch_outlier == False], global_targets[batch_outlier == False])
-            # if global_targets[batch_outlier == True].shape[0] > 0:
-            #     losses["global_cluster_hard_loss_unlabel"] = self.get_hard_cluster_loss_cluster_unlabel(labels.clone(), inputs[batch_outlier == True], global_targets[batch_outlier == True])
-
-                if self.use_part_feat:
-                    bottom_cluster_hard_loss = self.get_hard_cluster_loss(labels.clone(), bottom_inputs, bottom_targets)
-                    top_cluster_hard_loss = self.get_hard_cluster_loss(labels.clone(), top_inputs, top_targets)
-                    losses["part_cluster_hard_loss"] = bottom_cluster_hard_loss + top_cluster_hard_loss
-            # print(losses)
+            
+            if self.use_part_feat:
+                losses["part_cluster_hard_loss"] = torch.tensor(0.)
+                bottom_cluster_hard_loss = self.get_hard_cluster_loss(labels.clone(), bottom_inputs, bottom_targets)
+                top_cluster_hard_loss = self.get_hard_cluster_loss(labels.clone(), top_inputs, top_targets)
+                losses["part_cluster_hard_loss"] = bottom_cluster_hard_loss + top_cluster_hard_loss
         return losses

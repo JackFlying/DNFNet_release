@@ -211,7 +211,6 @@ class TwoStageDetectorsiamese(BaseDetector):
             dict[str, Tensor]: a dictionary of loss components
         """
         ########Add mask on person region
-        import iddb;    ipdb.set_trace()
         if self.use_mask:
             with torch.no_grad():
                 ori_img = img.clone()
@@ -222,14 +221,14 @@ class TwoStageDetectorsiamese(BaseDetector):
                         x1, y1, x2, y2 = (gt_bboxes[i][j] + 1).to(torch.int).cpu().numpy()
                         if (x2 - x1) < 4 or (y2 - y1) < 4:
                             break
-                        img_gtbbox = img[i, :, y1: y2, x1: x2]
-                        if torch.rand(1) < self.pro_mask:
-                            if self.pixel_mask:
+                        img_gtbbox = img[i, :, y1: y2, x1: x2]  # 潜复制，对img_gtbbox的修改相当于对img的修改
+                        if torch.rand(1) < self.pro_mask:   # pro_mask=0.5, 0.5的比例mask
+                            if self.pixel_mask: # False
                                 mask = torch.rand(img_gtbbox.shape[-2:]).type_as(img_gtbbox) <= self.mask_ratio
                                 img_gtbbox[:, mask] = C_mean.squeeze(-1)
                             else:
-                                h = int((y2 - y1) / 14)
-                                w = int((x2 - x1) / 6)
+                                h = int((y2 - y1) / 14) # 分割成14*6的patch, h和w分别代表每块的高度和长度
+                                w = int((x2 - x1) / 6) 
                                 center_x = torch.randint(6, (self.num_mask_patch,)) * w
                                 center_y = torch.randint(14, (self.num_mask_patch,)) * h
                                 mask = torch.zeros(img_gtbbox.shape[-2:]).type_as(img_gtbbox)
@@ -241,7 +240,7 @@ class TwoStageDetectorsiamese(BaseDetector):
 
         kwargs.pop('epoch')   ####use epoch for training (try)
         if self.use_mask:
-            if self.mask_up:
+            if self.mask_up:    # 提取经过mask图像的特征
                 x = self.extract_feat(img)
             else:
                 x = self.extract_feat(ori_img)
@@ -286,7 +285,7 @@ class TwoStageDetectorsiamese(BaseDetector):
             if self.mask_down:
                 gt_img = self.gt_align(img, gt_bboxes)
             else:
-                gt_img = self.gt_align(ori_img, gt_bboxes)
+                gt_img = self.gt_align(ori_img, gt_bboxes)  # 通过align提取原始gt特征
         else:
             gt_img = self.gt_align(img, gt_bboxes)
         gt_x = self.extract_feat(gt_img)

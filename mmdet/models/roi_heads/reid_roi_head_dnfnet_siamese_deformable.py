@@ -1,5 +1,3 @@
-from re import T
-from tkinter import N
 import torch
 
 from mmdet.core import bbox2result, bbox2roi, build_assigner, build_sampler
@@ -7,20 +5,14 @@ from ..builder import HEADS, build_head, build_roi_extractor
 from .base_roi_head import BaseRoIHead
 from .test_mixins import BBoxTestMixin, MaskTestMixin
 import torch.nn.functional as F
-import torch.nn as nn
 
 @HEADS.register_module()
-class ReidRoIHeadDNFNet2(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
+class ReidRoIHeadDnfnetsiameseDeformable(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
     """Simplest base roi head including one bbox head and one mask head."""
 
     def init_assigner_sampler(self):
         """Initialize assigner and sampler."""
-        self.bbox_assigner = None
-        self.bbox_sampler = None
-        if self.train_cfg:
-            self.bbox_assigner = build_assigner(self.train_cfg.assigner)
-            self.bbox_sampler = build_sampler(
-                self.train_cfg.sampler, context=self)
+        pass
 
     def init_bbox_head(self, bbox_roi_extractor, bbox_head):
         """Initialize ``bbox_head``"""
@@ -67,18 +59,18 @@ class ReidRoIHeadDNFNet2(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
         if self.with_mask:
             mask_rois = rois[:100]
             mask_results = self._mask_forward(x, mask_rois)
-            outs = outs + (mask_results['mask_pred'], )
+            outs = outs + (mask_results['mask_pred'],)
         return outs
 
     def forward_train(self,
                       x,
+                      gt_x,
                       img_metas,
-                      proposal_list,
+                      sampling_results,
                       gt_bboxes,
                       gt_labels,
                       gt_bboxes_ignore=None,
-                      gt_masks=None,
-                      **kwargs):
+                      gt_masks=None):
         """
         Args:
             x (list[Tensor]): list of multi-level img features.
@@ -99,41 +91,13 @@ class ReidRoIHeadDNFNet2(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
         Returns:
             dict[str, Tensor]: a dictionary of loss components
         """
-        use_crop = kwargs['use_crop']
-        crop_feats_list = self._crop_forward(kwargs, gt_bboxes)
-
-        if self.with_bbox or self.with_mask:
-            num_imgs = len(img_metas)
-            if gt_bboxes_ignore is None:
-                gt_bboxes_ignore = [None for _ in range(num_imgs)]
-            sampling_results = []
-            for i in range(num_imgs):
-                assign_result = self.bbox_assigner.assign(
-                    proposal_list[i], gt_bboxes[i], gt_bboxes_ignore[i], gt_labels[i])
-                if use_crop:
-                    sampling_result = self.bbox_sampler.sample(
-                        assign_result,
-                        proposal_list[i],
-                        gt_bboxes[i],
-                        gt_labels[i],
-                        feats=[lvl_feat[i][None] for lvl_feat in x],
-                        crop_feats=crop_feats_list[i])
-                else:
-                    sampling_result = self.bbox_sampler.sample(
-                        assign_result,
-                        proposal_list[i],
-                        gt_bboxes[i],
-                        gt_labels[i],
-                        feats=[lvl_feat[i][None] for lvl_feat in x],
-                        crop_feats=None)
-                sampling_results.append(sampling_result)
 
         losses = dict()
         # bbox head forward and loss
         if self.with_bbox:
-            bbox_results = self._bbox_forward_train(x, sampling_results,
+            bbox_results = self._bbox_forward_train(x, gt_x, sampling_results,
                                                     gt_bboxes, gt_labels,
-                                                    img_metas, **kwargs)
+                                                    img_metas)
             losses.update(bbox_results['loss_bbox'])
 
         # mask head forward and loss
@@ -147,69 +111,45 @@ class ReidRoIHeadDNFNet2(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
 
         return losses
 
-    def _crop_forward(self, kwargs, gt_bboxes):
-        use_crop = kwargs['use_crop']
-        if use_crop:
-            crop_feats = kwargs['crop_feats']
-            crop_feats1 = []
-            crop_feats2 = []
-            for i in range(len(crop_feats)):
-                crop_feat1 = F.adaptive_max_pool2d(crop_feats[i], 1)
-                crop_feats1.append(crop_feat1)
-                if self.with_shared_head:
-                    crop_feat2 = self.shared_head(crop_feats[i])   # [N, 2048, 7, 7]
-                    crop_feat2 = F.adaptive_max_pool2d(crop_feat2, 1)   # [N, 2048, 1, 1]
-                    crop_feats2.append(crop_feat2)
-            crop_feats1 = torch.cat(crop_feats1, dim=0)
-            crop_feats2 = torch.cat(crop_feats2, dim=0)
-            crop_feats3 = self.bbox_head.crop_forward(crop_feats1, crop_feats2)
-            splits = [gt_bboxes[i].shape[0] for i in range(len(gt_bboxes))]
-            crop_feats_list = crop_feats3.split(splits)
-            return crop_feats_list
-        else:
-            return None
-
-    def _bbox_forward(self, x, rois, labels=None, bbox_targets=None, pos_is_gt_list=None):
+    def _bbox_forward(self, x, rois, gt_x_list=None, sampling_results=None):
         """Box head forward function used in both training and testing."""
-        # x[0]:[1, 1024, 54, 94]
-
-        part_feats, RoI_Align_feat = None, None
-        bbox_feats = self.bbox_roi_extractor(x[:self.bbox_roi_extractor.num_inputs], rois)   # [N, 1024, 14, 6], [14, 14]表示[height, width]
-        if self.use_part_feat:
-            height = bbox_feats.shape[2]
-            part_feats = [bbox_feats[:, :, 0:height//2], bbox_feats[:, :, height//2:]] # 2 * [N, 1024, 7, 14]
-        if self.use_RoI_Align_feat:
-            RoI_Align_feat = bbox_feats.detach()    # visualize heat map
-        
-        cls_score, bbox_pred, id_pred, part_id_pred = self.bbox_head(bbox_feats, part_feats, labels, rois, bbox_targets, pos_is_gt_list) # [N, 256]
-        bbox_results = dict(cls_score=cls_score, bbox_pred=bbox_pred, bbox_feats=bbox_feats, id_pred=id_pred, \
-                            RoI_Align_feat=RoI_Align_feat, part_id_pred=part_id_pred, scene_emb=None, gfn_losses=torch.tensor(0.),
-                            id_pred_log_var=None)
-        
+        # TODO: a more flexible way to decide which feature maps to use
+        bbox_feats = self.bbox_roi_extractor(x[:self.bbox_roi_extractor.num_inputs], rois)
+        if self.with_shared_head:
+            bbox_feats = self.shared_head(bbox_feats)
+            if gt_x_list is not None:
+                gt_bbox_feats = [self.shared_head(x[0]) for x in gt_x_list]
+            else:
+                gt_bbox_feats = None
+        else:
+            if gt_x_list is not None:
+                gt_bbox_feats = [x[0] for x in gt_x_list]
+            else:
+                gt_bbox_feats = None
+        cls_score, bbox_pred, id_pred, id_pred_part, gt_id_pred_list, id_pred_part_list = self.bbox_head(bbox_feats, gt_bbox_feats, sampling_results)
+        bbox_results = dict(
+            cls_score=cls_score, bbox_pred=bbox_pred, bbox_feats=bbox_feats, id_pred=id_pred, id_pred_part=id_pred_part, \
+                    gt_id_pred_list=gt_id_pred_list, id_pred_part_list=id_pred_part_list)
         return bbox_results
 
-    def _bbox_forward_train(self, x, sampling_results, gt_bboxes, gt_labels,
-                            img_metas, **kwargs):
+    def _bbox_forward_train(self, x, gt_x, sampling_results, gt_bboxes, gt_labels,
+                            img_metas):
         """Run forward function and calculate loss for box head in training."""
-        # self.sampler_num = [res.pos_bboxes.shape[0] + res.neg_bboxes.shape[0] for res in sampling_results]
-        rois = bbox2roi([res.bboxes for res in sampling_results])
+        rois = bbox2roi([res.bboxes for res in sampling_results])  ###256*5
+        bbox_results = self._bbox_forward(x, rois, gt_x, sampling_results)
 
         bbox_targets = self.bbox_head.get_targets(sampling_results, gt_bboxes,
-                                                  gt_labels, self.train_cfg, **kwargs)
-        # labels, label_weights, bbox_targets, bbox_weights, bbox_targets_xywh, pos_is_gt_list, crop_targets = bbox_targets
-        labels = bbox_targets[0]
-        pos_is_gt_list = bbox_targets[5]
-        bbox_results = self._bbox_forward(x, rois, labels, bbox_targets, pos_is_gt_list)
+                                                  gt_labels, self.train_cfg)
         loss_bbox = self.bbox_head.loss(bbox_results['cls_score'],
                                         bbox_results['bbox_pred'],
                                         bbox_results['id_pred'], 
-                                        bbox_results['part_id_pred'],
-                                        bbox_results['id_pred_log_var'],
-                                        rois,
-                                        # crop_targets=None,
-                                        *bbox_targets,
-                                        **kwargs)
-        loss_bbox.update(gfn_losses=bbox_results['gfn_losses'])
+                                        bbox_results['id_pred_part'],
+                                        bbox_results['gt_id_pred_list'], 
+                                        bbox_results['id_pred_part_list'], 
+                                        sampling_results,
+                                        gt_labels, rois,
+                                        *bbox_targets)
+
         bbox_results.update(loss_bbox=loss_bbox)
         return bbox_results
 
@@ -292,23 +232,18 @@ class ReidRoIHeadDNFNet2(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
                 rescale=rescale,
                 mask_test_cfg=self.test_cfg.get('mask'))
             return bbox_results, segm_results
-    
+
     def simple_test_bboxes(self,
                            x,
+                           gt_x_list,  ######
                            img_metas,
                            proposals,
                            rcnn_test_cfg,
-                           rescale=False,
-                           **kwargs):
+                           rescale=False):
         """Test only det bboxes without augmentation."""
-        if kwargs['use_crop']:
-            crop_feats_list = self._crop_forward(kwargs, proposals)
-            crop_feats = crop_feats_list[0]
-        else:
-            crop_feats = None
-
         rois = bbox2roi(proposals)
-        bbox_results = self._bbox_forward(x, rois)
+        # bbox_results = self._bbox_forward(x, rois)     ###########
+        bbox_results = self._bbox_forward(x, rois, gt_x_list, proposals)
         img_shapes = tuple(meta['img_shape'] for meta in img_metas)
         scale_factors = tuple(meta['scale_factor'] for meta in img_metas)
 
@@ -316,101 +251,48 @@ class ReidRoIHeadDNFNet2(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
         cls_score = bbox_results['cls_score']
         bbox_pred = bbox_results['bbox_pred']
         id_pred = bbox_results['id_pred']
-        RoI_Align_feat = bbox_results['RoI_Align_feat']
-        part_id_pred = bbox_results['part_id_pred']
-        scene_emb = bbox_results['scene_emb']
-        id_pred_log_var = bbox_results['id_pred_log_var']
-
+        id_pred_part = bbox_results['id_pred_part']
         num_proposals_per_img = tuple(len(p) for p in proposals)
         rois = rois.split(num_proposals_per_img, 0)
-        cls_score = cls_score.split(num_proposals_per_img, 0)
+        # cls_score = cls_score.split(num_proposals_per_img, 0)
+        cls_score = tuple([cls_score]) #####  # ###########
         # some detector with_reg is False, bbox_pred will be None
-        bbox_pred = bbox_pred.split(num_proposals_per_img,0) if bbox_pred is not None else [None, None]
+        bbox_pred = bbox_pred.split(
+            num_proposals_per_img,
+            0) if bbox_pred is not None else [None, None]
         id_pred = id_pred.split(num_proposals_per_img, 0)
-        
-        if scene_emb is not None:
-            scene_emb = scene_emb.repeat(num_proposals_per_img[0], 1)
-        
-        if RoI_Align_feat is not None:
-            RoI_Align_feat = RoI_Align_feat.split(num_proposals_per_img, 0)
-
-        if part_id_pred is not None:
-            part_id_pred = part_id_pred.split(num_proposals_per_img, 0)
-
-        if crop_feats is not None:
-            crop_feats = crop_feats.split(num_proposals_per_img, 0)
-        
-        if id_pred_log_var is not None:
-            id_pred_log_var = id_pred_log_var.split(num_proposals_per_img, 0)
-
-        if self.bbox_head_cfg.type == 'CoLearningHead':
-            id_pred2 = bbox_results['id_pred2']
-            id_pred2 = id_pred2.split(num_proposals_per_img, 0)
+        id_pred_part = id_pred_part.split(num_proposals_per_img, 0)
 
         # apply bbox post-processing to each image individually
         det_bboxes = []
         det_labels = []
-
         for i in range(len(proposals)):
             det_bbox, det_label = self.bbox_head.get_bboxes(
                 rois[i],
                 cls_score[i],
                 bbox_pred[i],
                 id_pred[i],
-                # RoI_Align_feat[i].view(RoI_Align_feat[i].shape[0], -1),  # [2048, 7, 7]
-                part_id_pred[i] if part_id_pred is not None else None,
+                id_pred_part[i],
                 img_shapes[i],
                 scale_factors[i],
                 rescale=rescale,
                 cfg=rcnn_test_cfg)
             det_bboxes.append(det_bbox)
             det_labels.append(det_label)
-
-        # if id_pred_log_var is not None and part_id_pred is None:
-        #     for i in range(len(proposals)):
-        #         det_bbox, det_label = self.bbox_head.get_bboxes(
-        #             rois[i],
-        #             cls_score[i],
-        #             bbox_pred[i],
-        #             id_pred[i],
-        #             # RoI_Align_feat[i].view(RoI_Align_feat[i].shape[0], -1),  # [2048, 7, 7]
-        #             id_pred_log_var[i],
-        #             img_shapes[i],
-        #             scale_factors[i],
-        #             rescale=rescale,
-        #             cfg=rcnn_test_cfg)
-        #     det_bboxes.append(det_bbox)
-        #     det_labels.append(det_label)
-        # elif id_pred_log_var is None and part_id_pred is not None:
-        #     for i in range(len(proposals)):
-        #         det_bbox, det_label = self.bbox_head.get_bboxes(
-        #             rois[i],
-        #             cls_score[i],
-        #             bbox_pred[i],
-        #             id_pred[i],
-        #             # RoI_Align_feat[i].view(RoI_Align_feat[i].shape[0], -1),  # [2048, 7, 7]
-        #             part_id_pred[i] if part_id_pred is not None else None,
-        #             img_shapes[i],
-        #             scale_factors[i],
-        #             rescale=rescale,
-        #             cfg=rcnn_test_cfg)
-        #         det_bboxes.append(det_bbox)
-        #         det_labels.append(det_label)
-            
         return det_bboxes, det_labels
 
     def simple_test(self,
                     x,
+                    gt_x_list, #############
                     proposal_list,
                     img_metas,
                     proposals=None,
-                    rescale=False, 
-                    **kwargs):
+                    rescale=False):
         """Test without augmentation."""
         assert self.with_bbox, 'Bbox head must be implemented.'
 
         det_bboxes, det_labels = self.simple_test_bboxes(
-            x, img_metas, proposal_list, self.test_cfg, rescale=rescale, **kwargs)
+            x, gt_x_list, img_metas, proposal_list, self.test_cfg, rescale=rescale)  # ####
         bbox_results = [
             bbox2result(det_bboxes[i], det_labels[i],
                         self.bbox_head.num_classes)
@@ -424,16 +306,16 @@ class ReidRoIHeadDNFNet2(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
                 x, img_metas, det_bboxes, det_labels, rescale=rescale)
             return list(zip(bbox_results, segm_results))
 
-    def aug_test(self, x, proposal_list, img_metas, rescale=False):
+    def aug_test(self, x, gt_x, proposal_list, img_metas, rescale=False):
         """Test with augmentations.
 
         If rescale is False, then returned bboxes and masks will fit the scale
         of imgs[0].
         """
         # recompute feats to save memory
-        det_bboxes, det_labels = self.aug_test_bboxes(x, img_metas,
+        det_bboxes, det_labels = self.aug_test_bboxes(x, gt_x, img_metas,
                                                       proposal_list,
-                                                      self.test_cfg)
+                                                      self.test_cfg) #gt_x,
 
         if rescale:
             _det_bboxes = det_bboxes

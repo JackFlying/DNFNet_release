@@ -37,7 +37,7 @@ class Quaduplet2Loss(nn.Module):
         self.bg_weight = bg_weight
 
 
-    def forward(self, inputs, targets, index=None, IoU=None):
+    def forward(self, inputs, targets, index=None):
         """
         Does not calculate noise inputs with label -1
         Args:
@@ -50,7 +50,10 @@ class Quaduplet2Loss(nn.Module):
         targets_new = []
         # indexs_new = []
         inputs = F.normalize(inputs)
-        # inputs /= inputs.norm()
+
+        # ratio = torch.load(os.path.join('saved_file', 'ratio.pth')).cuda()    # [N]
+        # ratio_batch = ratio[index[index != -2]]
+        
         for i in range(len(targets)):
             if targets[i] < 0:
                 bg.append(inputs[i])
@@ -63,18 +66,12 @@ class Quaduplet2Loss(nn.Module):
         targets_new = torch.stack(targets_new)
         # indexs_new = torch.stack(indexs_new)
         
-        # label_mask = torch.load(os.path.join('saved_file', 'label_mask.pth')).cuda()    # [N, ]
-        # target_label_mask = label_mask[indexs_new]
-        # inputs_new = inputs_new[target_label_mask]
-        # targets_new = targets_new[target_label_mask]
-        
         n = inputs_new.size(0)
         loss = torch.tensor(0.).to(inputs_new.device)
         if n == 0:
             return loss
         # Compute pairwise distance, replace by the official when merged
         dist = euclidean_dist(inputs_new, inputs_new)
-        # dist = cosine_dist(inputs_new, inputs_new)
   
         # For each anchor, find the hardest positive and negative
         mask = targets_new.expand(n, n).eq(targets_new.expand(n, n).t())
@@ -97,7 +94,7 @@ class Quaduplet2Loss(nn.Module):
             # Compute ranking hinge loss
             y = torch.ones_like(dist_an)
             loss_instance = self.ranking_loss(dist_an, dist_ap, y)
-            # loss_instance = loss_instance * target_label_mask
+            # loss_instance = loss_instance * ratio_batch
             loss_instance = loss_instance.mean()
             loss += self.instance_weight * loss_instance
         except:
@@ -111,7 +108,6 @@ class Quaduplet2Loss(nn.Module):
             
         if m > 0:
             dist_new = euclidean_dist(inputs_new, bg)
-            # dist_new = cosine_dist(inputs_new, bg)
             dist_ap, dist_an = [], []
             try:
                 for i in range(n):
@@ -122,7 +118,7 @@ class Quaduplet2Loss(nn.Module):
                 
                 y = torch.ones_like(dist_an)
                 loss_bg = self.ranking_loss(dist_an, dist_ap, y)
-                # loss_bg = loss_bg * target_label_mask
+                # loss_bg = loss_bg * ratio_batch
                 loss_bg = loss_bg.mean()
                 loss += self.bg_weight * loss_bg
             except:

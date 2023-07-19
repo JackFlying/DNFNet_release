@@ -63,6 +63,7 @@ def get_weighted_mean(memory_features): # 只能求一个簇
     return weighted_mean
 
 def get_uncertainty_by_centroid(labels, features, logger, T):
+    # old_labels = labels
     labels = torch.tensor(labels[0])
     features = torch.tensor(features[0])
     new_labels = labels
@@ -77,6 +78,11 @@ def get_uncertainty_by_centroid(labels, features, logger, T):
         centroid = torch.stack(centroid)
         sim = features.mm(centroid.t())
         argmax = sim.argmax(dim=-1)
+        # 与自身prototype的距离为d1，与最近非自身prototype的距离是d2，计算ratio=d1/d2。如果ratio>=1,则说明不是异常点;如果ratio<1,则是异常点,则ratio作为损失的权重.
+        # d1 = sim[torch.arange(sim.shape[0]), labels]
+        # d2 = sim[torch.arange(sim.shape[0]), argmax]
+        # ratio = d1 / (d2 + 1e-6)
+        # torch.save(ratio, os.path.join("saved_file", "ratio.pth"))
         uncertainty = (argmax == labels)
         new_labels = transfer_label_noise_to_outlier(uncertainty, argmax.tolist())[0]
         new_labels = torch.tensor(new_labels)
@@ -86,20 +92,7 @@ def get_uncertainty_by_centroid(labels, features, logger, T):
             break
         else:
             last_uncertainty_num = len(uncertainty[uncertainty == False])
-    torch.save(uncertainty, os.path.join("saved_file", "uncertainty.pth"))
-    
-    # import ipdb;    ipdb.set_trace()
-    # centroid = generate_cluster_features(labels[0], features[0])
-    # labels = torch.tensor(labels[0])
-    # features = features[0]
-    # sim = features.mm(centroid.t())
-    # argmax = sim.argmax(dim=-1)
-    # uncertainty = (argmax == labels)
-    # new_labels = transfer_label_noise_to_outlier(uncertainty, argmax.tolist())[0]
-    # new_labels = torch.tensor(new_labels)
-
-    # logger.info("uncertainty sample number: " + str(len(uncertainty[uncertainty == False])))
-    # logger.info("certainty sample number: " + str(len(uncertainty[uncertainty == True])))
+    # torch.save(uncertainty, os.path.join("saved_file", "uncertainty.pth"))
     
     return new_labels
 
@@ -186,13 +179,13 @@ def get_uncertainty_by_part(pseudo_labels, pseudo_label2s, memory_features, logg
     # hard_iou_labels = compute_sample_softlabels(pseudo_label2s, pseudo_labels, "iou", "original")
     # sample_soft_labels = beta * hard_iou_labels + (1.0 - beta) * prob_soft_labels   # 软硬标签的综合程度, [N, pseudo_labels_numbers]
     # uncertainty = sample_soft_labels[torch.arange(len(pseudo_labels[0])), pseudo_labels[0]]
-    uncertainty_threshold = cfg.PSEUDO_LABELS.hard_mining.uncertainty_threshold
+    uncertainty_threshold = cfg.PSEUDO_LABELS.part_feat.uncertainty_threshold
     logger.info("uncertainty > uncertainty_threshold: " + str(len(uncertainty[uncertainty > uncertainty_threshold])))
     logger.info("uncertainty < uncertainty_threshold: " + str(len(uncertainty[uncertainty <= uncertainty_threshold])))
-    if cfg.PSEUDO_LABELS.hard_mining.use_hard_mining:
-        uncertainty[uncertainty > uncertainty_threshold] = 1
-        uncertainty[uncertainty <= uncertainty_threshold] = 0
+    uncertainty[uncertainty > uncertainty_threshold] = 1
+    uncertainty[uncertainty <= uncertainty_threshold] = 0
     return uncertainty
+
 
 def transfer_outlier_label(labels):
     """

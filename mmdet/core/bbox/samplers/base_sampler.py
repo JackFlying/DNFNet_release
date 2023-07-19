@@ -94,7 +94,7 @@ class BaseSampler(metaclass=ABCMeta):
         neg_inds = self.neg_sampler._sample_neg(
             assign_result, num_expected_neg, bboxes=bboxes, **kwargs)
         neg_inds = neg_inds.unique()
-
+        # import ipdb;    ipdb.set_trace()
         crop_feats = kwargs.get('crop_feats', None)
         if crop_feats is None:
             sampling_result = SamplingResult(pos_inds, neg_inds, bboxes, gt_bboxes,

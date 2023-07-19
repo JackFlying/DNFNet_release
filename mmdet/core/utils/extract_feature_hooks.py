@@ -63,24 +63,17 @@ class ExtractFeatureHook(Hook):
                 features, img_ids, person_ids, std_features, features_unnorm = self.extract_features(
                     runner.model, self.dataloader, self.dataloader.dataset, with_path=False, prefix="Extract: ", \
                     pretrained_feature_file=self.pretrained_feature_file)
-                # if self.alliance_clustering or self.uncertainty_estimation:
-                #     assert features.size(0) == 2 * self.dataloader.dataset.id_num
-                #     assert img_ids.size(0) == 2 * self.dataloader.dataset.id_num
-                #     assert person_ids.size(0) == 2 * self.dataloader.dataset.id_num
-                # else:
-                #     assert features.size(0) == self.dataloader.dataset.id_num
-                #     assert img_ids.size(0) == self.dataloader.dataset.id_num
-                #     assert person_ids.size(0) == self.dataloader.dataset.id_num
-                #     assert std_features.size(0) == self.dataloader.dataset.id_num
                 if self.cfg.save_features:
                     torch.save(features, os.path.join("saved_file", "features.pth"))
                     torch.save(person_ids, os.path.join("saved_file", "person_ids.pth"))
 
         if self.use_part_feats:
-            bottom_features = torch.load(os.path.join("saved_file","bottom_features.pth"))
-            top_features = torch.load(os.path.join("saved_file", "top_features.pth"))
-            runner.model.module.roi_head.bbox_head.loss_reid._update_bottom_feature(bottom_features)
-            runner.model.module.roi_head.bbox_head.loss_reid._update_top_feature(top_features)
+            # bottom_features = torch.load(os.path.join("saved_file","bottom_features.pth"))
+            # top_features = torch.load(os.path.join("saved_file", "top_features.pth"))
+            part_features = torch.load(os.path.join("saved_file", "part_features.pth"))
+            runner.model.module.roi_head.bbox_head.loss_reid._update_part_feature(part_features)
+            # runner.model.module.roi_head.bbox_head.loss_reid._update_bottom_feature(bottom_features)
+            # runner.model.module.roi_head.bbox_head.loss_reid._update_top_feature(top_features)
         
         # if self.use_feature_std:
         #     runner.model.module.roi_head.bbox_head.loss_reid._update_top_feature(top_features)
@@ -142,7 +135,7 @@ class ExtractFeatureHook(Hook):
         prog_bar = mmcv.ProgressBar(len(data_loader))
         for i in range(len(data_loader)):
             if self.cfg.testing:
-                if i > 120:
+                if i > 60:
                     break
             data = next(data_iter)
             gt_bboxes=data['gt_bboxes'][0]._data[0][0]
@@ -176,10 +169,10 @@ class ExtractFeatureHook(Hook):
             new_data = {'proposals':data['gt_bboxes'], 'img': data['img'], 'img_metas': data['img_metas'], 'use_crop':False}
             result = model(return_loss=False, rescale=False, **new_data)
             reid_features = torch.from_numpy(result[0][0][:, 5:5+256])
-            
             if self.use_part_feats:
-                bottom_feats = torch.from_numpy(result[0][0][:, 5+256:5+2*256])
-                top_feats = torch.from_numpy(result[0][0][:, 5+2*256:5+3*256])
+                part_feats = torch.from_numpy(result[0][0][:, 5+256:5+2*256])
+                # bottom_feats = torch.from_numpy(result[0][0][:, 5+256:5+2*256])
+                # top_feats = torch.from_numpy(result[0][0][:, 5+2*256:5+3*256])
             if self.use_gfn:
                 scene_feats = torch.from_numpy(result[0][0][:, 5+3*256:5+3*256+2048])
             if self.use_feature_std:
@@ -188,8 +181,9 @@ class ExtractFeatureHook(Hook):
             if normalize:
                 reid_features_norm = F.normalize(reid_features, p=2, dim=-1)
                 if self.use_part_feats:
-                    bottom_feats = F.normalize(bottom_feats, p=2, dim=-1)
-                    top_feats = F.normalize(top_feats, p=2, dim=-1)
+                    part_feats = F.normalize(part_feats, p=2, dim=-1)
+                    # bottom_feats = F.normalize(bottom_feats, p=2, dim=-1)
+                    # top_feats = F.normalize(top_feats, p=2, dim=-1)
                 if self.use_gfn:
                     scene_feats = F.normalize(scene_feats, p=2, dim=-1)
 
@@ -200,8 +194,9 @@ class ExtractFeatureHook(Hook):
                     features = torch.zeros(dataset.id_num, reid_features.shape[1])
                     features_norm = torch.zeros(dataset.id_num, reid_features_norm.shape[1])
                     if self.use_part_feats:
-                        bottom_features = torch.zeros(dataset.id_num, bottom_feats.shape[1])
-                        top_features = torch.zeros(dataset.id_num, top_feats.shape[1])
+                        part_features = torch.zeros(dataset.id_num, part_feats.shape[1])
+                        # bottom_features = torch.zeros(dataset.id_num, bottom_feats.shape[1])
+                        # top_features = torch.zeros(dataset.id_num, top_feats.shape[1])
                     if self.use_gfn:
                         scene_features = torch.zeros(dataset.id_num, scene_feats.shape[1])
                     if self.use_feature_std:
@@ -234,8 +229,9 @@ class ExtractFeatureHook(Hook):
             img_ids[gt_ids] = gt_img_ids
             person_ids[gt_ids] = gt_person_ids
             if self.use_part_feats:
-                bottom_features[gt_ids] = bottom_feats
-                top_features[gt_ids] = top_feats
+                part_features[gt_ids] = part_feats
+                # bottom_features[gt_ids] = bottom_feats
+                # top_features[gt_ids] = top_feats
             if self.use_gfn:
                 scene_features[gt_ids] = scene_feats
             if self.use_feature_std:
@@ -259,9 +255,10 @@ class ExtractFeatureHook(Hook):
 
         synchronize()
         if self.use_part_feats:
-            torch.save(bottom_features, os.path.join("saved_file", "bottom_features.pth"))
-            torch.save(top_features, os.path.join("saved_file", "top_features.pth"))
-            torch.save(top_features, os.path.join("saved_file", "scene_features.pth"))
+            torch.save(part_features, os.path.join("saved_file", "part_features.pth"))
+            # torch.save(bottom_features, os.path.join("saved_file", "bottom_features.pth"))
+            # torch.save(top_features, os.path.join("saved_file", "top_features.pth"))
+            # torch.save(top_features, os.path.join("saved_file", "scene_features.pth"))
 
         if is_dist and cuda:
             # distributed: gather features from all GPUs

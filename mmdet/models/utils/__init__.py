@@ -12,8 +12,9 @@ from .hybrid_memory_loss_uncertainty import HybridMemoryMultiFocalPercentUncerta
 from .hybrid_memory_loss_MCDropout import HybridMemoryMultiFocalPercentMCDropout
 from .hybrid_memory_loss_cluster import HybridMemoryMultiFocalPercentCluster
 from .hybrid_memory_loss_cluster_unlabeled import HybridMemoryMultiFocalPercentClusterUnlabeled
+from .hybrid_memory_loss_cluster_unlabeled_gt import HybridMemoryMultiFocalPercentClusterUnlabeledGt
 
 __all__ = ['ResLayer', 'gaussian_radius', 'gen_gaussian_target', 'UnifiedLossMemoryMultiFocalPercent', \
     'Quaduplet2Loss', 'HybridMemoryMultiFocalPercent', 'ClusterMemory', 'CircleLoss', 'UnifiedLoss', 'HybridMemoryMultiFocalPercentv2',\
     'MemoryQuaduplet2Loss', 'HybridMemoryMultiFocalPercentCluster', 'HybridMemoryMultiFocalPercentDnfnet', 'HybridMemoryMultiFocalPercentUncertainty',\
-        'HybridMemoryMultiFocalPercentMCDropout', 'HybridMemoryMultiFocalPercentClusterUnlabeled']
+        'HybridMemoryMultiFocalPercentMCDropout', 'HybridMemoryMultiFocalPercentClusterUnlabeled', 'HybridMemoryMultiFocalPercentClusterUnlabeledGt']

@@ -97,7 +97,7 @@ class MultiHeadCrossAttention(nn.Module):
         return x.view(batch_size, seq_len, self.num_heads * self.head_dim)
 
 @HEADS.register_module()
-class DNFNet2Head(nn.Module):
+class CPCLHead(nn.Module):
     '''for person search, output reid features'''
     """Simplest RoI head, with only two fc layers for classification and
     regression respectively."""
@@ -146,7 +146,7 @@ class DNFNet2Head(nn.Module):
                  triplet_instance_weight=1,
                  gfn_config=None,
                  norm_type='l2norm'):
-        super(DNFNet2Head, self).__init__()
+        super(CPCLHead, self).__init__()
         assert with_cls or with_reg
         self.with_avg_pool = with_avg_pool
         self.with_cls = with_cls
@@ -170,7 +170,7 @@ class DNFNet2Head(nn.Module):
         self.reid_loss_weight = loss_reid['loss_weight']
         self.triplet_weight = triplet_weight
         self.global_weight = global_weight
-        self.use_gfn = gfn_config['use_gfn']
+        # self.use_gfn = gfn_config['use_gfn']
         self.norm_type = norm_type   # ['l2norm', 'protonorm', 'batchnorm']
         self.use_bn_affine = use_bn_affine
         in_channels = self.in_channels
@@ -207,11 +207,11 @@ class DNFNet2Head(nn.Module):
                         norm_cfg=dict(type='BN', requires_grad=True),
                         act_cfg=dict(type='ReLU'),
                         bias='auto'),)
-            # if self.rcnn_bbox_bn:
-            #     self.fc_reg = nn.Sequential(nn.Linear(self.feat_channels, out_dim_reg),
-            #     nn.BatchNorm1d(out_dim_reg)
-            #     )
-            # else:
+            if self.rcnn_bbox_bn:
+                self.fc_reg = nn.Sequential(nn.Linear(self.feat_channels, out_dim_reg),
+                                            nn.BatchNorm1d(out_dim_reg)
+                )
+            else:
                 self.fc_reg = nn.Linear(self.feat_channels, out_dim_reg)
 
             self.cls_convs = nn.ModuleList()
@@ -233,9 +233,7 @@ class DNFNet2Head(nn.Module):
         self.feature_h = 14
         self.feature_w = 6
         self.fc_reid = nn.Linear(in_channels * self.feature_h * self.feature_w, self.reid_feat_dim)
-        self.fc_part_reid = nn.ModuleList([nn.Linear(in_channels * self.feature_h * self.feature_w // 2, self.reid_feat_dim),
-                                        nn.Linear(in_channels * self.feature_h * self.feature_w // 2, self.reid_feat_dim),
-                                    ])
+        # self.fc_part_reid = nn.ModuleList([nn.Linear(in_channels * self.feature_h * self.feature_w // 2, self.reid_feat_dim) for _ in range(2)])
         if self.norm_type is 'protonorm':
             self.normalize = PrototypeNorm1d(self.reid_feat_dim)
             self.normalize_part = nn.ModuleList([PrototypeNorm1d(self.reid_feat_dim), PrototypeNorm1d(self.reid_feat_dim)])
@@ -253,7 +251,7 @@ class DNFNet2Head(nn.Module):
             self.normalize_std = nn.BatchNorm1d(num_features=self.reid_feat_dim, affine=self.use_bn_affine)
             self.bgnormalize_std = nn.BatchNorm1d(num_features=self.reid_feat_dim, affine=self.use_bn_affine)
         self.proposal_score_max = False
-        self.gt_fused_gru = nn.GRU(input_size=self.reid_feat_dim, hidden_size=self.reid_feat_dim, batch_first=True)
+        # self.gt_fused_gru = nn.GRU(input_size=self.reid_feat_dim, hidden_size=self.reid_feat_dim, batch_first=True)
         
         # decoder_layer = nn.TransformerDecoderLayer(d_model=256, nhead=2, dim_feedforward=1024, dropout=0.0, activation='relu')
         # self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=1)
@@ -281,16 +279,16 @@ class DNFNet2Head(nn.Module):
         nn.init.normal_(self.fc_reid.weight, 0, 0.001)
         nn.init.constant_(self.fc_reid.bias, 0)
 
+        # for i in range(len(self.fc_part_reid)):
+        #     nn.init.normal_(self.fc_part_reid[i].weight, 0, 0.001)
+        #     nn.init.constant_(self.fc_part_reid[i].bias, 0)
+        #     nn.init.normal_(self.fc_part_reid[i].weight, 0, 0.001)
+        #     nn.init.constant_(self.fc_part_reid[i].bias, 0)
+
         # for name, param in self.gt_fused_gru.named_parameters():
         #     if 'weight' in name:
         #         nn.init.normal_(param, 0, 0.01)
     
-        # nn.init.normal_(self.fc1.weight, 0, 0.001)
-        # nn.init.constant_(self.fc1.bias, 0)
-
-        # nn.init.normal_(self.fc2.weight, 0, 0.001)
-        # nn.init.constant_(self.fc2.bias, 0)
-
         
     @auto_fp16()
     def crop_forward(self, crop_feats1, crop_feats2):
@@ -459,8 +457,6 @@ class DNFNet2Head(nn.Module):
         
         x_reid = x
         id_pred = self.fc_reid(x_reid.view(x_reid.size(0), -1))
-
-        # import ipdb;    ipdb.set_trace()
 
         if self.training:
             id_labels = labels[:, 1]
@@ -791,16 +787,16 @@ class DNFNet2Head(nn.Module):
         # rid_pred = self.integrate_gt_context(rid_pred, targets, pos_is_gt_list)
         # id_pred[id_labels!=-2] = rid_pred
         
-        memory_loss = self.loss_reid(rid_pred, rid_labels, IoU, rpart_feats, top_IoU, bottom_IoU, pos_is_gt_list)
+        memory_loss = self.loss_reid(rid_pred, rid_labels, IoU, top_IoU, bottom_IoU, rpart_feats)
         memory_loss['global_cluster_hard_loss'] *= self.global_weight
-        memory_loss["part_cluster_hard_loss"] *= (1 - self.global_weight)
+        # memory_loss["part_cluster_hard_loss"] *= (1 - self.global_weight)
         losses.update(memory_loss)
 
         if self.use_quaduplet_loss:
             cluster_id_labels = self.loss_reid.get_cluster_ids(id_labels[id_labels != -2])
             new_id_labels = id_labels.clone()
             new_id_labels[id_labels != -2] = cluster_id_labels
-            losses['global_triplet_loss'] = self.loss_triplet(id_pred, new_id_labels, id_labels, IoU) * self.triplet_weight
+            losses['global_triplet_loss'] = self.loss_triplet(id_pred, new_id_labels, id_labels) * self.triplet_weight
 
         return losses
 

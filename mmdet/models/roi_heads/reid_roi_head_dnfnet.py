@@ -171,34 +171,54 @@ class ReidRoIHeadDNFNet(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
 
     def _bbox_forward(self, x, rois, labels=None, bbox_targets=None, test=False):
         """Box head forward function used in both training and testing."""
-        part_feats, part_feats1, RoI_Align_feat = None, None, None
+        # part_feats, part_feats1, RoI_Align_feat = None, None, None
+        # bbox_feats = self.bbox_roi_extractor(x[:self.bbox_roi_extractor.num_inputs], rois)   # [N, 1024, 14, 14], [14, 14]表示[height, width]
+        # bbox_feats1 = F.adaptive_max_pool2d(bbox_feats, 1).squeeze(-1).squeeze(-1)  # [N, 1024, 1, 1]
+
+        # if self.use_part_feat:
+        #     part_feats = torch.nn.AdaptiveAvgPool2d((4, 1))(bbox_feats)   # [N, 1024, 2, 1]
+        #     part_feats1 = [part_feats[:, :, i:i+1] for i in range(part_feats.shape[2])] # 2 * [N, 1024, 1, 1]
+
+        # if self.with_shared_head:
+        #     bbox_feats = self.shared_head(bbox_feats)   # [N, 2048, 7, 7]
+        #     if self.use_part_feat:
+        #         part_feats = [self.shared_head(part_feats1[i]) for i in range(len(part_feats1))]
+        #     if self.use_RoI_Align_feat:
+        #         RoI_Align_feat = bbox_feats.detach()    # visualize heat map
+        #     bbox_feats = F.adaptive_max_pool2d(bbox_feats, 1)   # [N, 2048, 1, 1]
+
+        RoI_Align_feat = None
         bbox_feats = self.bbox_roi_extractor(x[:self.bbox_roi_extractor.num_inputs], rois)   # [N, 1024, 14, 14], [14, 14]表示[height, width]
         bbox_feats1 = F.adaptive_max_pool2d(bbox_feats, 1).squeeze(-1).squeeze(-1)  # [N, 1024, 1, 1]
-
         if self.use_part_feat:
-            part_feats = torch.nn.AdaptiveAvgPool2d((2, 1))(bbox_feats)   # [N, 1024, 2, 1]
-            part_feats1 = [part_feats[:, :, 0:1], part_feats[:, :, 1:2]] # 2 * [N, 1024, 1, 1]
-
+            part_num = 2
+            # part_height = bbox_feats.shape[2] // part_num
+            part_height = bbox_feats.shape[2] - 1
+            part_feats_list = [bbox_feats[:, :, i:i+part_height, :] for i in range(part_num)]   # N, 1024, 7, 14]
+            part_feats1_list = [F.adaptive_max_pool2d(x, 1) for x in part_feats_list]  # 2 * [N, 1024, 1, 1]
+        
         if self.with_shared_head:
             bbox_feats = self.shared_head(bbox_feats)   # [N, 2048, 7, 7]
+            bbox_feats = F.adaptive_max_pool2d(bbox_feats, 1)   # [N, 2048, 1, 1]
             if self.use_part_feat:
-                part_feats = [self.shared_head(part_feats1[0]), self.shared_head(part_feats1[1])]
+                part_feats_list = [self.shared_head(x) for x in part_feats_list]
+                part_feats_list = [F.adaptive_max_pool2d(x, 1) for x in part_feats_list]
             if self.use_RoI_Align_feat:
                 RoI_Align_feat = bbox_feats.detach()    # visualize heat map
-            bbox_feats = F.adaptive_max_pool2d(bbox_feats, 1)   # [N, 2048, 1, 1]
 
         scene_emb, scene_emb1, scene_emb2, gfn_losses = None, None, None, torch.tensor(0.)
-        if self.use_gfn:
-            scene_emb1 = F.adaptive_max_pool2d(x[0], 1).squeeze(-1).squeeze(-1) # x[0]=[N, 1024, H, W] => [N, 1024, 1, 1]
-            if self.with_shared_head:
-                scene_emb2 = F.adaptive_max_pool2d(x[0], self.scene_emb_size) # [N, 1024, scene_emb_size, scene_emb_size]
-                scene_emb2 = self.shared_head(x[0])
-                scene_emb2 = F.adaptive_max_pool2d(scene_emb2, 1).squeeze(-1).squeeze(-1) # [N, 2048, 1, 1]
-                scene_emb = self.embedding_head({'feat_res4':scene_emb1, 'feat_res5':scene_emb2})[0]
+        # if self.use_gfn:
+        #     scene_emb1 = F.adaptive_max_pool2d(x[0], 1).squeeze(-1).squeeze(-1) # x[0]=[N, 1024, H, W] => [N, 1024, 1, 1]
+        #     if self.with_shared_head:
+        #         scene_emb2 = F.adaptive_max_pool2d(x[0], self.scene_emb_size) # [N, 1024, scene_emb_size, scene_emb_size]
+        #         scene_emb2 = self.shared_head(x[0])
+        #         scene_emb2 = F.adaptive_max_pool2d(scene_emb2, 1).squeeze(-1).squeeze(-1) # [N, 2048, 1, 1]
+        #         scene_emb = self.embedding_head({'feat_res4':scene_emb1, 'feat_res5':scene_emb2})[0]
     
-        cls_score, bbox_pred, id_pred, part_id_pred, _, query_embed = self.bbox_head(bbox_feats1, bbox_feats, part_feats1, part_feats, scene_emb1, scene_emb2, labels, rois, bbox_targets) # [N, 256]
-        if self.use_gfn and self.training:
-            gfn_losses = self.bbox_head.gfn_forward(scene_emb, query_embed, labels)
+        # cls_score, bbox_pred, id_pred, part_id_pred, _, query_embed = self.bbox_head(bbox_feats1, bbox_feats, part_feats1, part_feats, scene_emb1, scene_emb2, labels, rois, bbox_targets) # [N, 256]
+        cls_score, bbox_pred, id_pred, part_id_pred, _, query_embed = self.bbox_head(bbox_feats1, bbox_feats, part_feats1_list, part_feats_list, scene_emb1, scene_emb2, labels, rois, bbox_targets) # [N, 256]
+        # if self.use_gfn and self.training:
+        #     gfn_losses = self.bbox_head.gfn_forward(scene_emb, query_embed, labels)
 
         bbox_results = dict(cls_score=cls_score, bbox_pred=bbox_pred, bbox_feats=bbox_feats, id_pred=id_pred, \
                             RoI_Align_feat=RoI_Align_feat, part_id_pred=part_id_pred, scene_emb=scene_emb, gfn_losses=gfn_losses)

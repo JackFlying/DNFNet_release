@@ -26,7 +26,14 @@ class OptimizerHook(Hook):
         runner.optimizer.zero_grad()
         runner.outputs['loss'].backward()
         if self.grad_clip is not None:
+            # import torch
+            # import ipdb;    ipdb.set_trace()
+            # for name, param in runner.model.named_parameters():
+            #     if(param.requires_grad and param.grad is not None):
+            #         print(name, param.shape)
+            #         print(name, param.shape, torch.norm(param.grad.detach(), 2))
             grad_norm = self.clip_grads(runner.model.parameters())
+            # print(grad_norm)
             if grad_norm is not None:
                 # Add grad norm to the logger
                 runner.log_buffer.update({'grad_norm': float(grad_norm)},

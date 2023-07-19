@@ -47,8 +47,8 @@ class ClusterHook(Hook):
         self.label_generator = LabelGenerator(self.cfg, self.dataloaders)
         self.epoch = 0
         self.epoch_interval = epoch_interval
-        self.use_part_feat = cfg.PSEUDO_LABELS.part_feat.use_part_feat
-        self.part_based_uncertainty = cfg.PSEUDO_LABELS.part_feat.uncertainty
+        # self.use_part_feat = cfg.PSEUDO_LABELS.part_feat.use_part_feat
+        # self.part_based_uncertainty = cfg.PSEUDO_LABELS.part_feat.uncertainty
         try:
             self.use_inter_cluster = cfg.PSEUDO_LABELS.inter_cluster.use_inter_cluster
         except:
@@ -83,9 +83,9 @@ class ClusterHook(Hook):
                 )
             
             start_ind += dataset.id_num
-
-            if not self.part_based_uncertainty:
-                pseudo_labels, label_centers, pseudo_blabels, pseudo_tlabels = self.label_generator(
+            
+            if not self.cfg.PSEUDO_LABELS.part_feat.use_part_feat: # 用global特征
+                pseudo_labels, label_centers = self.label_generator(
                     memory_features=memory_features, 
                     image_inds=runner.model.module.roi_head.bbox_head.loss_reid.idx[:len(memory_features[0])].clone().cpu(),
                     cfg=self.cfg
@@ -93,24 +93,30 @@ class ClusterHook(Hook):
                 if self.use_inter_cluster:
                     pseudo_labels = get_uncertainty_by_centroid(pseudo_labels, memory_features, self.logger, self.cfg.PSEUDO_LABELS.inter_cluster.T)
                     pseudo_labels = [pseudo_labels]
+                    # get_uncertainty_by_centroid(pseudo_labels, memory_features, self.logger, self.cfg.PSEUDO_LABELS.inter_cluster.T)
 
             else:
-                self.cfg.PSEUDO_LABELS.part_feat.use_part_feat = True   # 为了防止新的epoch自动变成0
-                pseudo_labels, label_centers, pseudo_blabels, pseudo_tlabels = self.label_generator(
-                    memory_features=memory_features, 
-                    image_inds=runner.model.module.roi_head.bbox_head.loss_reid.idx[:len(memory_features[0])].clone().cpu(),
-                    cfg=self.cfg
-                )
-                if self.part_based_uncertainty:
-                    self.cfg.PSEUDO_LABELS.part_feat.use_part_feat = False
-                    pseudo_label2s, _, _, _ = self.label_generator(
-                        memory_features=memory_features,
+                if not self.cfg.PSEUDO_LABELS.part_feat.uncertainty: # hybrid pseudo label
+                    pseudo_labels, label_centers = self.label_generator(
+                        memory_features=memory_features, 
                         image_inds=runner.model.module.roi_head.bbox_head.loss_reid.idx[:len(memory_features[0])].clone().cpu(),
                         cfg=self.cfg
                     )
-                    uncertainty = get_uncertainty_by_part(pseudo_labels, pseudo_label2s, memory_features, self.logger, self.cfg)
-                    if self.cfg.PSEUDO_LABELS.hard_mining.use_hard_mining:
-                        pseudo_labels = transfer_label_noise_to_outlier(uncertainty, pseudo_labels[0])
+                else:   # 用dual label
+                    pseudo_labels_list = []
+                    global_weights = self.cfg.PSEUDO_LABELS.part_feat.global_weights
+                    for i in range(len(global_weights)):
+                        self.cfg.PSEUDO_LABELS.part_feat.global_weight = global_weights[i]
+                        pseudo_labels, _, = self.label_generator(
+                            memory_features=memory_features,
+                            image_inds=runner.model.module.roi_head.bbox_head.loss_reid.idx[:len(memory_features[0])].clone().cpu(),
+                            cfg=self.cfg
+                        )
+                        pseudo_labels_list.append(pseudo_labels)
+                    pseudo_labels = pseudo_labels_list[0]
+                    pseudo_labels2 = pseudo_labels_list[1]
+                    uncertainty = get_uncertainty_by_part(pseudo_labels, pseudo_labels2, memory_features, self.logger, self.cfg)
+                    pseudo_labels = transfer_label_noise_to_outlier(uncertainty, pseudo_labels[0])
                     weight = get_weight_by_uncertainty(uncertainty, pseudo_labels[0])
                     torch.save(weight, os.path.join("saved_file", "weight.pth"))
 
@@ -120,30 +126,15 @@ class ClusterHook(Hook):
         # pseudo_labels = instance_label(pseudo_labels)
         # pseudo_labels = get_outlier(pseudo_labels)
 
-        memory_labels, memory_blabels, memory_tlabels = [], [], []
+        memory_labels = []
         start_pid = 0
         for idx, dataset in enumerate(self.datasets):
             labels = pseudo_labels[idx]
             memory_labels.append(torch.LongTensor(labels) + start_pid)
-            if self.part_based_uncertainty and pseudo_blabels != []:
-                blabels = pseudo_blabels[idx]
-                tlabels = pseudo_tlabels[idx]
-                memory_blabels.append(torch.LongTensor(blabels) + start_pid)
-                memory_tlabels.append(torch.LongTensor(tlabels) + start_pid)
-            else:
-                blabels = pseudo_labels[idx]
-                tlabels = pseudo_labels[idx]
-                memory_blabels.append(torch.LongTensor(blabels) + start_pid)
-                memory_tlabels.append(torch.LongTensor(tlabels) + start_pid)
-                
             start_pid += max(labels) + 1
         memory_labels = torch.cat(memory_labels).view(-1)
-        if self.part_based_uncertainty:
-            memory_blabels = torch.cat(memory_blabels).view(-1)
-            memory_tlabels = torch.cat(memory_tlabels).view(-1)
             
         runner.model.module.roi_head.bbox_head.loss_reid.clock = 0
-        
         if hasattr(runner.model.module.roi_head.bbox_head.loss_reid, "use_cluster_memory"):
             if hasattr(runner.model.module.roi_head.bbox_head.loss_reid, "cluster_mean"):   # use mean
                 runner.model.module.roi_head.bbox_head.loss_reid._del_cluster()
@@ -155,13 +146,6 @@ class ClusterHook(Hook):
                 runner.model.module.roi_head.bbox_head.loss_reid._init_cluster(means.cuda())
         
         runner.model.module.roi_head.bbox_head.loss_reid._update_label(memory_labels)
-        
-        # if self.part_based_uncertainty:
-            # runner.model.module.roi_head.bbox_head.loss_reid._update_blabel(memory_blabels)
-            # runner.model.module.roi_head.bbox_head.loss_reid._update_tlabel(memory_tlabels)
-            # self.logger.info('bottom pseudo label range: '+ str(memory_blabels.min())+ str(memory_blabels.max()))
-            # self.logger.info('top pseudo label range: '+ str(memory_tlabels.min())+ str(memory_tlabels.max()))
-        
         self.logger.info('pseudo label range: '+ str(memory_labels.min())+ str(memory_labels.max()))
         self.logger.info("Finished updating pseudo label")
         self.epoch += 1
