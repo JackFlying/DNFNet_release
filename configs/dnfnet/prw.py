@@ -5,7 +5,7 @@ _base_ = [
 ]
 TEST = False
 USE_PART_FEAT = True
-GLOBAL_WEIGHT = 0.9
+GLOBAL_WEIGHT = 0.9 # not used
 UNCERTAINTY = True  # 时候用dual label
 USE_GFN = False
 model = dict(
@@ -29,7 +29,7 @@ model = dict(
             id_num=18048,
             testing=TEST,
             rcnn_bbox_bn=False,
-            cluster_top_percent=0.6,    # defalut: 0.6
+            cluster_top_percent=0.6,
             momentum=0.2,
             IoU_memory_clip=[0.2, 0.9],
             use_cluster_hard_loss=True,
@@ -151,7 +151,7 @@ PSEUDO_LABELS = dict(
     search_type=0, # 0,1,2 for GPU, 3 for CPU (work for faiss)
     cluster_num=None,
     iters=1,    # 1
-    lambda_scene=0,   # 调成0,即zero初始化
+    lambda_scene=0,
     lambda_person=0.1,
     context_method='zero',
     threshold=0.5,
@@ -159,13 +159,17 @@ PSEUDO_LABELS = dict(
     filter_threshold=0.2,
     use_crop=False,
     use_k_reciprocal_nearest=False,
+    K=10,
     part_feat=dict(use_part_feat=USE_PART_FEAT, 
                     global_weight=GLOBAL_WEIGHT,
                     uncertainty=UNCERTAINTY,
                     uncertainty_threshold=0.5,
                     global_weights=[1.0, 0.9]
                     ),
-    K=10,
+    inter_cluster=dict(
+                    use_inter_cluster=True, # USE_PART_FEAT==False启动
+                    T=1,
+                    )
 )
 workflow = [('train', 1)]
 evaluation = dict(start=16, interval=2, metric='bbox')

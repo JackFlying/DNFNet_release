@@ -70,7 +70,7 @@ class LabelGenerator(object):
         self.eps = None
 
     @torch.no_grad()
-    def __call__(self, cuda=True, memory_features=None, image_inds=None, epoch=0, eps=None, **kwargs):
+    def __call__(self, cuda=True, memory_features=None, part_memory_features=None, image_inds=None, epoch=0, eps=None, **kwargs):
 
         all_labels, all_blabels, all_tlabels = [], [], []
         all_centers = []
@@ -94,6 +94,7 @@ class LabelGenerator(object):
 
             assert isinstance(memory_features, list)
             all_features = memory_features[idx]
+            all_part_features = part_memory_features[idx]
             if image_inds is not None:
                 all_inds = image_inds
             else:
@@ -102,8 +103,10 @@ class LabelGenerator(object):
             if self.cfg.PSEUDO_LABELS.norm_feat:
                 if isinstance(all_features, list):
                     all_features = [F.normalize(f, p=2, dim=1) for f in all_features]
+                    all_part_features = [F.normalize(f, p=2, dim=1) for f in all_part_features]
                 else:
                     all_features = F.normalize(all_features, p=2, dim=1)
+                    all_part_features = F.normalize(all_part_features, p=2, dim=1)
             if self.rank == 0:
                 # clustering only on GPU:0
                 if self.cluster_type in ['dbscan_context_eps', 'dbscan_context_eps_all', 'dbscan_context_eps_all_weight']:
@@ -138,6 +141,7 @@ class LabelGenerator(object):
                     ](
                         kwargs['cfg'],
                         all_features,
+                        all_part_features,
                         num_classes=num_classes,
                         cuda=cuda,
                         indep_thres=indep_thres,

@@ -294,6 +294,9 @@ class TwoStageDetectorSiamesePart(BaseDetector):
                 gt_img = self.gt_align(img, gt_bboxes)
             else:
                 gt_img = self.gt_align(ori_img, gt_bboxes)  # 通过align提取原始gt特征
+                gt_top_img = self.gt_align(ori_img, top_gt_bboxes_list)
+                gt_bottom_img = self.gt_align(ori_img, bottom_gt_bboxes_list)
+                gt_img_list = [gt_img, gt_top_img, gt_bottom_img]
         else:
             gt_img = self.gt_align(img, gt_bboxes)
             gt_top_img = self.gt_align(img, top_gt_bboxes_list)

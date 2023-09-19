@@ -291,17 +291,16 @@ def search_performance_calc(gallery_set, probe_set, gallery_det, gallery_feat, p
                         'ap':ap, 
                         'acc':acc,
                         'pid':probe_pid,
-                        
                         'gallery': []}
         # only save top-10 predictions
-        # for k in range(10):
-        #     new_entry['gallery'].append({
-        #         'img': str(imgs[inds[k]]),
-        #         'roi': list(rois[inds[k]]),
-        #         'score': float(y_score[k]),
-        #         'correct': int(y_true[k]),
-        #         'roi_feats':roi_feats[inds[k]],
-        #     })
+        for k in range(10):
+            new_entry['gallery'].append({
+                'img': str(imgs[inds[k]]),
+                'roi': list(rois[inds[k]]),
+                'score': float(y_score[k]),
+                'correct': int(y_true[k]),
+                'roi_feats':roi_feats[inds[k]],
+            })
         ret['results'].append(new_entry)
     
     with open('evaluate_result.pkl','wb') as f:

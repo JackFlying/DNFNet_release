@@ -12,7 +12,7 @@ from mmdet.core import (auto_fp16, build_bbox_coder, force_fp32, multi_apply,
                         multiclass_nms, multiclass_nms_aug)
 from mmdet.models.builder import HEADS, build_loss
 from mmdet.models.losses import accuracy
-from mmdet.models.utils import HybridMemoryMultiFocalPercent, Quaduplet2Loss, HybridMemoryMultiFocalPercentDnfnet
+from mmdet.models.utils import HybridMemoryMultiFocalPercent, Quaduplet2Loss, HybridMemoryMultiFocalPercentDnfnet, HybridMemoryMultiFocalPercentDnfnetGtBranch
 from mmcv.ops import DeformConv2dPack
 
 @HEADS.register_module()
@@ -51,6 +51,8 @@ class DNFNetSiameseHeadDeformable(nn.Module):
                  use_cluster_hard_loss=True,
                  use_quaduplet_loss=True,
                  use_part_feat=False,
+                 cluster_mean_method='naive',
+                 tc_winsize=500,
                  update_method=None,
                  num_features=256,
                  triplet_weight=1,
@@ -67,7 +69,9 @@ class DNFNetSiameseHeadDeformable(nn.Module):
                  flag_reid_fc=True,
                  feature_h=14,
                  feature_w=6,
-                 use_deform=True
+                 use_deform=True,
+                 use_siamese=True,
+                 use_gt_branch_memory_bank=False,
                  ):
         super(DNFNetSiameseHeadDeformable, self).__init__()
         assert with_cls or with_reg
@@ -82,14 +86,16 @@ class DNFNetSiameseHeadDeformable(nn.Module):
         self.reg_decoded_bbox = reg_decoded_bbox
         self.fp16_enabled = False
 
-
         self.bbox_coder = build_bbox_coder(bbox_coder)
         self.loss_cls = build_loss(loss_cls)
         self.loss_bbox = build_loss(loss_bbox)
-        self.loss_reid = HybridMemoryMultiFocalPercentDnfnet(num_features, id_num, temperature, momentum, cluster_top_percent, use_cluster_hard_loss, testing,
-                                                    IoU_memory_clip, use_part_feat, update_method)
-        # self.loss_reid = HybridMemoryMultiFocalPercent(256, id_num, top_percent=cluster_top_percent, momentum=momentum, testing=testing)
-        
+        self.use_gt_branch_memory_bank = use_gt_branch_memory_bank
+        if use_gt_branch_memory_bank:
+            self.loss_reid = HybridMemoryMultiFocalPercentDnfnetGtBranch(num_features, id_num, temperature, momentum, cluster_top_percent, use_cluster_hard_loss, testing,
+                                                        IoU_memory_clip, use_part_feat, update_method, cluster_mean_method, tc_winsize)
+        else:
+            self.loss_reid = HybridMemoryMultiFocalPercentDnfnet(num_features, id_num, temperature, momentum, cluster_top_percent, use_cluster_hard_loss, testing,
+                                                        IoU_memory_clip, use_part_feat, update_method, cluster_mean_method, tc_winsize)
         self.loss_triplet = Quaduplet2Loss(bg_weight=triplet_bg_weight)
         self.use_quaduplet_loss = use_quaduplet_loss
         self.reid_loss_weight = loss_reid['loss_weight']
@@ -103,6 +109,8 @@ class DNFNetSiameseHeadDeformable(nn.Module):
         self.coefficient_sim = coefficient_sim
         self.coefficient_kl = coefficient_kl
         self.use_deform = use_deform
+        self.use_siamese = use_siamese
+        self.use_part_feat = use_part_feat
         self.stacked_convs = stacked_convs
         self.feat_channels = 512
         self.flag_reid_fc = flag_reid_fc
@@ -239,13 +247,15 @@ class DNFNetSiameseHeadDeformable(nn.Module):
         #         x_reid = self.id_feature(x_reid)
         #         id_pred = F.normalize(x_reid)
         #         gt_id_pred = None
-        
+
         if not self.training:
             if gt_id_pred_list is not None:
                 # gt + pred
-                id_pred = (id_pred + gt_id_pred_list[0]) / 2
-                id_pred_part_list[0] = (id_pred_part_list[0] + gt_id_pred_list[1]) / 2  # bottom
-                id_pred_part_list[1] = (id_pred_part_list[1] + gt_id_pred_list[2]) / 2  # top
+                if self.use_siamese:
+                    if self.use_gt_branch_memory_bank == False:
+                        id_pred = (id_pred + gt_id_pred_list[0]) / 2
+                        id_pred_part_list[0] = (id_pred_part_list[0] + gt_id_pred_list[1]) / 2  # bottom
+                        id_pred_part_list[1] = (id_pred_part_list[1] + gt_id_pred_list[2]) / 2  # top
         id_pred_part = torch.stack(id_pred_part_list, dim=0).mean(0)
         return cls_score, bbox_pred, id_pred, id_pred_part, gt_id_pred_list, id_pred_part_list
 
@@ -442,7 +452,6 @@ class DNFNetSiameseHeadDeformable(nn.Module):
             # for triplet
             new_id_pred[acc_nums_sam[i - 1]: acc_nums_sam[i - 1] + l_nums_pos[i]] = _mean_id_pred
 
-        mean_id_pred = torch.cat(mean_id_pred, dim=0)
         # gt
         gt_list_as_pos = torch.cat(gt_list_as_pos, dim=0)
         bottom_gt_list_as_pos = torch.cat(bottom_gt_list_as_pos, dim=0)
@@ -457,31 +466,37 @@ class DNFNetSiameseHeadDeformable(nn.Module):
         # mean_bottom_id_pred = (pos_bottom_id_pred + bottom_gt_list_as_pos) / 2
         # mean_top_id_pred = (pos_top_id_pred + top_gt_list_as_pos) / 2
         # mean_part_id_pred_ = (mean_bottom_id_pred + mean_top_id_pred) / 2
-        mean_part_id_pred = (pos_part_id_pred + part_gt_list_as_pos) / 2
+        if self.use_siamese:
+            if self.use_gt_branch_memory_bank:
+                memory_loss = self.loss_reid(pos_id_pred, pos_part_id_pred, gt_list_as_pos, part_gt_list_as_pos, \
+                                            id_labels[id_labels != -2], IoU, top_IoU, bottom_IoU)
+            else:
+                mean_id_pred = torch.cat(mean_id_pred, dim=0)
+                mean_part_id_pred = (pos_part_id_pred + part_gt_list_as_pos) / 2
+                memory_loss = self.loss_reid(mean_id_pred, mean_part_id_pred, id_labels[id_labels != -2], IoU, top_IoU, bottom_IoU)
+
+            losses['loss_sim'] = self.cal_sim_loss(pos_id_pred, gt_list_as_pos)
+            losses['loss_kl'] = self.cal_kl_loss(pos_id_pred, gt_list_as_pos)
+            if self.use_part_feat:
+                losses['loss_sim_part'] = self.cal_sim_loss(pos_part_id_pred, part_gt_list_as_pos)
+                losses['loss_kl_part'] = self.cal_kl_loss(pos_part_id_pred, part_gt_list_as_pos)
+                # losses['loss_sim_bottom'] = self.cal_sim_loss(pos_bottom_id_pred, bottom_gt_list_as_pos)
+                # losses['loss_kl_bottom'] = self.cal_kl_loss(pos_bottom_id_pred, bottom_gt_list_as_pos)
+                # losses['loss_sim_top'] = self.cal_sim_loss(pos_top_id_pred, top_gt_list_as_pos)
+                # losses['loss_kl_top'] = self.cal_kl_loss(pos_top_id_pred, top_gt_list_as_pos)
+        else:
+            memory_loss = self.loss_reid(pos_id_pred, pos_part_id_pred, id_labels[id_labels != -2], IoU, top_IoU, bottom_IoU)
         
-        memory_loss = self.loss_reid(mean_id_pred, mean_part_id_pred, id_labels[id_labels != -2], IoU, top_IoU, bottom_IoU)
         memory_loss["global_cluster_loss"] *= self.reid_loss_weight
         memory_loss["part_cluster_loss"] *= self.reid_loss_weight
         losses.update(memory_loss)
-        
-        losses['loss_sim'] = self.cal_sim_loss(pos_id_pred, gt_list_as_pos)
-        losses['loss_kl'] = self.cal_kl_loss(pos_id_pred, gt_list_as_pos)
-        
-        losses['loss_sim_bottom'] = self.cal_sim_loss(pos_bottom_id_pred, bottom_gt_list_as_pos)
-        losses['loss_kl_bottom'] = self.cal_kl_loss(pos_bottom_id_pred, bottom_gt_list_as_pos)
-        
-        losses['loss_sim_top'] = self.cal_sim_loss(pos_top_id_pred, top_gt_list_as_pos)
-        losses['loss_kl_top'] = self.cal_kl_loss(pos_top_id_pred, top_gt_list_as_pos)
-        
-        losses['loss_sim_part'] = self.cal_sim_loss(pos_part_id_pred, part_gt_list_as_pos)
-        losses['loss_kl_part'] = self.cal_kl_loss(pos_part_id_pred, part_gt_list_as_pos)
-                
-        cluster_id_labels = self.loss_reid.get_cluster_ids(id_labels[id_labels != -2])
-        new_id_labels = id_labels.clone()
-        new_id_labels[id_labels != -2] = cluster_id_labels
+
         if self.use_quaduplet_loss:
+            cluster_id_labels = self.loss_reid.get_cluster_ids(id_labels[id_labels != -2])
+            new_id_labels = id_labels.clone()
+            new_id_labels[id_labels != -2] = cluster_id_labels
             losses['loss_triplet'] = self.loss_triplet(new_id_pred, new_id_labels) * self.triplet_weight
-            
+        # print(losses)
         return losses
 
     @force_fp32(apply_to=('pos_id_pred', 'gt_list_as_pos'))

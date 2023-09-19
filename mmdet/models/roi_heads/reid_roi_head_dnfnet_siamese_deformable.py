@@ -242,7 +242,6 @@ class ReidRoIHeadDnfnetsiameseDeformable(BaseRoIHead, BBoxTestMixin, MaskTestMix
                            rescale=False):
         """Test only det bboxes without augmentation."""
         rois = bbox2roi(proposals)
-        # bbox_results = self._bbox_forward(x, rois)     ###########
         bbox_results = self._bbox_forward(x, rois, gt_x_list, proposals)
         img_shapes = tuple(meta['img_shape'] for meta in img_metas)
         scale_factors = tuple(meta['scale_factor'] for meta in img_metas)
@@ -252,6 +251,10 @@ class ReidRoIHeadDnfnetsiameseDeformable(BaseRoIHead, BBoxTestMixin, MaskTestMix
         bbox_pred = bbox_results['bbox_pred']
         id_pred = bbox_results['id_pred']
         id_pred_part = bbox_results['id_pred_part']
+        gt_id_pred_list = bbox_results['gt_id_pred_list']
+        gt_id_pred, gt_top_id_pred, gt_bottom_id_pred = gt_id_pred_list[0], gt_id_pred_list[1], gt_id_pred_list[2]
+        gt_part_id_pred = (gt_top_id_pred + gt_bottom_id_pred) / 2
+        
         num_proposals_per_img = tuple(len(p) for p in proposals)
         rois = rois.split(num_proposals_per_img, 0)
         # cls_score = cls_score.split(num_proposals_per_img, 0)
@@ -262,6 +265,8 @@ class ReidRoIHeadDnfnetsiameseDeformable(BaseRoIHead, BBoxTestMixin, MaskTestMix
             0) if bbox_pred is not None else [None, None]
         id_pred = id_pred.split(num_proposals_per_img, 0)
         id_pred_part = id_pred_part.split(num_proposals_per_img, 0)
+        gt_id_pred = gt_id_pred.split(num_proposals_per_img, 0)
+        gt_part_id_pred = gt_part_id_pred.split(num_proposals_per_img, 0)
 
         # apply bbox post-processing to each image individually
         det_bboxes = []
@@ -272,7 +277,8 @@ class ReidRoIHeadDnfnetsiameseDeformable(BaseRoIHead, BBoxTestMixin, MaskTestMix
                 cls_score[i],
                 bbox_pred[i],
                 id_pred[i],
-                id_pred_part[i],
+                # id_pred_part[i],
+                torch.cat([id_pred_part[i], gt_id_pred[i], gt_part_id_pred[i]], dim=-1),
                 img_shapes[i],
                 scale_factors[i],
                 rescale=rescale,

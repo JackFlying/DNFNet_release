@@ -135,6 +135,7 @@ def main(det_thresh=0.05, gallery_size=-1, ignore_cam_id=True):
 
     gallery_det, gallery_feat, RoI_Align_feats = [], [], []
     for det in all_dets:    # 6112
+
         if det[0].shape[0] > 0:
             det_ = det[0][:, :5]
             feat = normalize(det[0][:, 5:], axis=1)
@@ -246,12 +247,11 @@ def search_performance_calc(gallery_set, probe_set, gallery_det, gallery_feat, p
             scores = det[:, 4]
             feat_g = scores[:, np.newaxis] * feat_g
             # compute cosine similarities
-            sim = feat_g[:, 256:].dot(feat_p[256:]).ravel()
-            # global_sim = feat_g[:, :256].dot(feat_p[:256]).ravel()
-            # bottom_sim = feat_g[:, 256:256*2].dot(feat_p[256:2*256]).ravel()
-            # top_sim = feat_g[:, 2*256:3*256].dot(feat_p[2*256:3*256]).ravel()
-            # global_weight = 0.1
-            # sim = global_weight * global_sim + (1 - global_weight) / 2 * bottom_sim + (1 - global_weight) / 2 * top_sim
+            # sim = feat_g[:, 256:].dot(feat_p[256:]).ravel()
+            global_sim = feat_g[:, :256].dot(feat_p[:256]).ravel()
+            part_sim = feat_g[:, 256:256*2].dot(feat_p[256:2*256]).ravel()
+            part_weight = 0.8
+            sim = (1 - part_weight) * global_sim + part_weight * part_sim
 
             # assign label for each det
             label = np.zeros(len(sim), dtype=np.int32)
@@ -289,22 +289,22 @@ def search_performance_calc(gallery_set, probe_set, gallery_det, gallery_feat, p
         acc = [min(1, sum(y_true[:k])) for k in topk]
         accs.append(acc)
         # 4. Save result for JSON dump
-        new_entry = {'probe_img': str(probe_imname),
-                        'probe_roi': list(probe_roi.squeeze()),
-                        'probe_gt': probe_gts,
-                        'ap':ap, 
-                        'acc':acc,
-                        'gallery': []}
+        # new_entry = {'probe_img': str(probe_imname),
+        #                 'probe_roi': list(probe_roi.squeeze()),
+        #                 'probe_gt': probe_gts,
+        #                 'ap':ap, 
+        #                 'acc':acc,
+        #                 'gallery': []}
         # only save top-10 predictions
-        for k in range(10):
-            new_entry['gallery'].append({
-                'img': str(imgs[inds[k]]),
-                'roi': list(rois[inds[k]]),
-                'score': float(y_score[k]),
-                'correct': int(y_true[k]),
-                # 'roi_feats':roi_feats[inds[k]]
-            })
-        ret['results'].append(new_entry)
+        # for k in range(10):
+        #     new_entry['gallery'].append({
+        #         'img': str(imgs[inds[k]]),
+        #         'roi': list(rois[inds[k]]),
+        #         'score': float(y_score[k]),
+        #         'correct': int(y_true[k]),
+        #         # 'roi_feats':roi_feats[inds[k]]
+        #     })
+        # ret['results'].append(new_entry)
     
     # with open('evaluate_result.pkl','wb') as f:
     #     pickle.dump(ret, f)

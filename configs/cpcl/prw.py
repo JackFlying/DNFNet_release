@@ -3,12 +3,12 @@ _base_ = [
     '../_base_/datasets/coco_reid_unsup_prw.py',
     '../_base_/schedules/schedule_1x_reid_norm_base.py', '../_base_/default_runtime.py'
 ]
-TEST = False
+TEST = True
 USE_PART_FEAT = False
 GLOBAL_WEIGHT = 0.9
-CO_LEARNING = False
+# CO_LEARNING = False
 UNCERTAINTY = False
-HARD_MINING = False
+# HARD_MINING = False
 USE_GFN = False
 model = dict(
     backbone=dict(
@@ -57,7 +57,7 @@ model = dict(
             update_method='max_iou',    # ['momentum', 'iou', 'max_iou', 'momentum_max_iou']
             use_max_IoU_bbox=False,
             momentum=0.2,
-            cluster_mean_method='time_consistency',    # ['naive', 'intra_cluster', 'time_consistency', 'intra_cluster_time_consistency']
+            cluster_mean_method='time_consistency',    # ['naive', 'intra_cluster', 'time_consistency', 'intra_cluster_time_consistency', 'latest']
             tc_winsize=500,
             intra_cluster_T=0.1,
             use_part_feat=USE_PART_FEAT,
@@ -67,18 +67,18 @@ model = dict(
             margin=0.3,
             loss_bbox=dict(type='L1Loss', loss_weight=1),
             loss_reid=dict(loss_weight=1.0),
-            gfn_config=dict(
-                use_gfn=USE_GFN,
-                gfn_mode='image',    # {'image', 'separate', 'combined'}
-                gfn_activation_mode='se',   # combined:{'se', 'sum', 'identity'}
-                gfn_filter_neg=True,
-                gfn_query_mode='batch', # {'batch', 'oim'}
-                gfn_use_image_lut=True,
-                gfn_train_temp=0.1,
-                gfn_se_temp=0.2,
-                gfn_num_sample=(1, 1),
-                emb_dim=2048,
-            )
+            # gfn_config=dict(
+            #     use_gfn=USE_GFN,
+            #     gfn_mode='image',    # {'image', 'separate', 'combined'}
+            #     gfn_activation_mode='se',   # combined:{'se', 'sum', 'identity'}
+            #     gfn_filter_neg=True,
+            #     gfn_query_mode='batch', # {'batch', 'oim'}
+            #     gfn_use_image_lut=True,
+            #     gfn_train_temp=0.1,
+            #     gfn_se_temp=0.2,
+            #     gfn_num_sample=(1, 1),
+            #     emb_dim=2048,
+            # )
         )
     )
 )
@@ -205,6 +205,7 @@ PSEUDO_LABELS = dict(
                     global_weight=GLOBAL_WEIGHT,
                     uncertainty=UNCERTAINTY,
                     uncertainty_threshold=0.5,
+                    global_weights=[1.0, 0.9]
                     ),
     inter_cluster=dict(
                     use_inter_cluster=True, # USE_PART_FEAT==False启动

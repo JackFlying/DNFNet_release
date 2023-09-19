@@ -144,7 +144,7 @@ class CPCLHead(nn.Module):
                  margin=0.3,
                  triplet_bg_weight=0.25,
                  triplet_instance_weight=1,
-                 gfn_config=None,
+                #  gfn_config=None,
                  norm_type='l2norm'):
         super(CPCLHead, self).__init__()
         assert with_cls or with_reg

@@ -6,8 +6,9 @@ _base_ = [
 TEST = False
 USE_PART_FEAT = True
 GLOBAL_WEIGHT = 0.9
-UNCERTAINTY = False  # 时候用dual label
+UNCERTAINTY = True  # USE dual label when USE_PART_FEAT=True
 USE_GFN = False
+USE_GT_BRANCH_MEMORY_BANK = False
 model = dict(
     type='TwoStageDetectorSiamesePart',
     mask_ratio=0.2, # 用不到
@@ -53,15 +54,19 @@ model = dict(
             id_num=18048,
             testing=TEST,
             rcnn_bbox_bn=False,
-            cluster_top_percent=0.6,    # defalut: 0.6
+            cluster_top_percent=0.6,
             momentum=0.2,
             IoU_memory_clip=[0.2, 0.9],
             use_cluster_hard_loss=True,
             use_quaduplet_loss=True,
             use_part_feat=USE_PART_FEAT,
+            cluster_mean_method='naive',    # ['naive', 'intra_cluster', 'time_consistency', 'intra_cluster_time_consistency', 'latest']
+            tc_winsize=100,
             update_method='momentum',    # ['momentum', 'iou', 'max_iou', 'momentum_max_iou', 'gt']
             num_features=256,
             use_deform=True,
+            use_siamese=True,  # Whether to use double branches, clustering and memory bank both use mixed features
+            use_gt_branch_memory_bank=USE_GT_BRANCH_MEMORY_BANK,
         ),
         bbox_roi_extractor=dict(
             type='SingleRoIExtractor',
@@ -183,24 +188,29 @@ PSEUDO_LABELS = dict(
     k2=6, # for jaccard distance
     search_type=0, # 0,1,2 for GPU, 3 for CPU (work for faiss)
     cluster_num=None,
-    iters=1,    # 1
-    lambda_scene=0,   # 调成0,即zero初始化
-    lambda_person=0.1,
+    iters=1,
+    lambda_scene=0,
+    lambda_person=0.1,  # context similarity contribution weight
     context_method='zero',
     threshold=0.5,
     use_post_process=False,
     filter_threshold=0.2,
     use_crop=False,
     use_k_reciprocal_nearest=False,
+    K=10,
     part_feat=dict(use_part_feat=USE_PART_FEAT, 
                     global_weight=GLOBAL_WEIGHT,
                     uncertainty=UNCERTAINTY,
                     uncertainty_threshold=0.5,
+                    global_weights=[1.0, 0.9]
                     ),
-    K=10,
+    inter_cluster=dict(
+                    use_inter_cluster=False,
+                    T=1,
+                    )
 )
 workflow = [('train', 1)]
-evaluation = dict(start=6, interval=2, metric='bbox')
+evaluation = dict(start=28, interval=2, metric='bbox')
 testing = TEST
-save_features = True
+save_features = False
 restart = False

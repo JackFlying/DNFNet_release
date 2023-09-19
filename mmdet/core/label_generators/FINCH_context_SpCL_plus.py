@@ -436,7 +436,7 @@ def label_generator_FINCH_context_SpCL(cfg, features_list, initial_rank, cuda=Tr
     return labels_normal, centers, num_classes, indep_thres
 
 @torch.no_grad()
-def label_generator_FINCH_context_SpCL_Plus(cfg, features, cuda=True, indep_thres=None, all_inds=None, **kwargs):
+def label_generator_FINCH_context_SpCL_Plus(cfg, features, part_features, cuda=True, indep_thres=None, all_inds=None, **kwargs):
 
     unique_inds = set(all_inds.cpu().numpy())
     split_num = torch.zeros(len(unique_inds)).long()
@@ -445,12 +445,12 @@ def label_generator_FINCH_context_SpCL_Plus(cfg, features, cuda=True, indep_thre
     split_num = split_num.tolist()
     
     instance_sim = features.mm(features.t())
-    part_features = features
+    # part_features = features
     if cfg.PSEUDO_LABELS.part_feat.use_part_feat:
         print("-------------------------part based clustering---------------------------------")
         global_weight = cfg.PSEUDO_LABELS.part_feat.global_weight
         part_weight = 1 - global_weight
-        part_features = torch.load("./saved_file/part_features.pth")
+        # part_features = torch.load("./saved_file/part_features.pth")
         part_feat_sim = part_features.mm(part_features.t())
         instance_sim = global_weight * instance_sim + part_weight * part_feat_sim
 

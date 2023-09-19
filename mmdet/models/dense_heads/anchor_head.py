@@ -415,6 +415,7 @@ class AnchorHead(BaseDenseHead):
         bbox_targets = bbox_targets.reshape(-1, 4)
         bbox_weights = bbox_weights.reshape(-1, 4)
         bbox_pred = bbox_pred.permute(0, 2, 3, 1).reshape(-1, 4)
+        # import ipdb;    ipdb.set_trace()
         if self.reg_decoded_bbox:
             anchors = anchors.reshape(-1, 4)
             bbox_pred = self.bbox_coder.decode(anchors, bbox_pred)

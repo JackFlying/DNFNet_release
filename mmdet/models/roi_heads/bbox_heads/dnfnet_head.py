@@ -10,7 +10,7 @@ from mmdet.core import (auto_fp16, build_bbox_coder, force_fp32, multi_apply,
                         multiclass_nms, multiclass_nms_aug)
 from mmdet.models.builder import HEADS, build_loss
 from mmdet.models.losses import accuracy
-from mmdet.models.utils import HybridMemoryMultiFocalPercentDnfnet, Quaduplet2Loss
+from mmdet.models.utils import HybridMemoryMultiFocalPercentDnfnet, Quaduplet2Loss, HybridMemoryMultiFocalPercentClusterUnlabeled
 from .gfn import GalleryFilterNetwork
 from mmdet.models.utils.ProtoNorm import PrototypeNorm1d, register_targets_for_pn, convert_bn_to_pn
 import os
@@ -53,13 +53,15 @@ class DNFNetHead(nn.Module):
                  use_cluster_hard_loss=True,
                  use_quaduplet_loss=True,
                  use_part_feat=False,
+                 cluster_mean_method='naive',
+                 tc_winsize=500,
+                 intra_cluster_T=0.1,
+                 use_max_IoU_bbox=False,
+                 instance_top_percent=1.,
                  update_method=None,
                  num_features=256,
                  triplet_weight=1,
-                #  no_bg=False,
-                #  no_bg_triplet=False,
                  triplet_bg_weight=0.25,
-                 use_deform=True
                  ):
         super(DNFNetHead, self).__init__()
         assert with_cls or with_reg
@@ -79,22 +81,14 @@ class DNFNetHead(nn.Module):
         self.loss_cls = build_loss(loss_cls)
         self.loss_bbox = build_loss(loss_bbox)
         self.loss_reid = HybridMemoryMultiFocalPercentDnfnet(num_features, id_num, temperature, momentum, cluster_top_percent, use_cluster_hard_loss, testing,
-                                                    IoU_memory_clip, use_part_feat, update_method)
-
-        # self.loss_triplet = Quaduplet2Loss(margin=margin, bg_weight=triplet_bg_weight, instance_weight=triplet_instance_weight)
+                                                    IoU_memory_clip, use_part_feat, update_method, cluster_mean_method, tc_winsize)
+        # self.loss_reid = HybridMemoryMultiFocalPercentClusterUnlabeled(num_features, id_num, temperature, momentum, cluster_top_percent, instance_top_percent, use_cluster_hard_loss, testing, \
+        #                                                 use_part_feat, use_max_IoU_bbox, update_method, cluster_mean_method, tc_winsize, intra_cluster_T)
         self.loss_triplet = Quaduplet2Loss(bg_weight=triplet_bg_weight)
         self.use_quaduplet_loss = use_quaduplet_loss
         self.reid_loss_weight = loss_reid['loss_weight']
         self.triplet_weight = triplet_weight
-        # self.use_instance_loss = use_instance_loss
-        # self.use_inter_loss = use_inter_loss
-        # self.global_weight = global_weight
-        # self.co_learning = co_learning
-        # self.co_learning_weight = co_learning_weight
-        # self.use_gfn = gfn_config['use_gfn']
         self.norm_type = "l2norm"   # ['l2norm', 'protonorm', 'batchnorm']
-        # self.use_bn_affine = use_bn_affine
-        # self.seperate_norm = seperate_norm
         self.part_nums = 2
         in_channels = self.in_channels
         
@@ -226,7 +220,7 @@ class DNFNetHead(nn.Module):
         #     nn.init.normal_(self.query_feature.weight, 0, 0.001)
         #     nn.init.constant_(self.query_feature.bias, 0)
         #     nn.init.normal_(self.query_feature1.weight, 0, 0.001)
-        #     nn.init.constant_(self.query_feature1.bias, 0) 
+        #     nn.init.constant_(self.query_feature1.bias, 0)
       
     @auto_fp16()
     def crop_forward(self, crop_feats1, crop_feats2):
@@ -306,7 +300,7 @@ class DNFNetHead(nn.Module):
             register_targets_for_pn(self.normalize, person_id[id_labels!=-2].long(), norm_flag, IoU)
             register_targets_for_pn(self.normalize_part[0], person_id[id_labels!=-2].long(), bottom_update_flag, bottom_IoU)
             register_targets_for_pn(self.normalize_part[1], person_id[id_labels!=-2].long(), top_update_flag, top_IoU)
-    
+
         if self.norm_type in ['batchnorm'] and self.training:
             id_labels = labels[:, 1]
         

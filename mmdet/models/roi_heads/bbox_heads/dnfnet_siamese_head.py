@@ -54,8 +54,6 @@ class DNFNetSiameseHead(nn.Module):
                  update_method=None,
                  num_features=256,
                  triplet_weight=1,
-                #  no_bg=False,
-                #  no_bg_triplet=False,
                  triplet_bg_weight=0.25,
                  loss_add=True,
                  use_sim_loss=True,

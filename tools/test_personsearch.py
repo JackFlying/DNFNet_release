@@ -300,9 +300,9 @@ def main():
         gfeatures = mmcv.load("gallery_features.pkl")
         pfeatures = mmcv.load("probe_features.pkl")
     
-    if args.load_gallery:
-        gboxes = mmcv.load("gallery_detections.pkl")
-        gfeatures = mmcv.load("gallery_features.pkl")
+    # if args.load_gallery:
+    #     gboxes = mmcv.load("gallery_detections.pkl")
+    #     gfeatures = mmcv.load("gallery_features.pkl")
 
     # gboxes = mmcv.load("gallery_detections.pkl")
     # gfeatures = mmcv.load("gallery_features.pkl")
@@ -312,7 +312,7 @@ def main():
     dataset = PSDB("psdb_test", cfg.data_root)
     evaluate_detections(dataset, gboxes, threshold=args.reid_threshold)
     evaluate_detections(dataset, gboxes, threshold=args.reid_threshold, labeled_only=True)
-    evaluate_search_nae(dataset, gboxes, gfeatures, pfeatures, threshold=args.reid_threshold, gallery_size=100)
+    evaluate_search_nae(dataset, gboxes, gfeatures, pfeatures, threshold=args.reid_threshold, gallery_size=4000)
 
 
 if __name__ == '__main__':

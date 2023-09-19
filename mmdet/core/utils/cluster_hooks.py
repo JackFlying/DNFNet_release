@@ -59,8 +59,8 @@ class ClusterHook(Hook):
         if self.epoch % self.epoch_interval != 0:
             self.epoch += 1
             return
-        memory_features = []
-        use_gaussion = True if hasattr(runner.model.module.roi_head.bbox_head.loss_reid, "features_std") is True else False
+        memory_features, part_memory_features = [], []
+        # use_gaussion = True if hasattr(runner.model.module.roi_head.bbox_head.loss_reid, "features_std") is True else False
 
         memory_features_std = []
         start_ind = 0
@@ -74,41 +74,47 @@ class ClusterHook(Hook):
                 .clone()
                 .cpu()
             )
-            if use_gaussion:
-                memory_features_std.append(
+            if self.cfg.PSEUDO_LABELS.part_feat.use_part_feat:
+                part_memory_features.append(
                     runner.model.module.roi_head.bbox_head.loss_reid
-                    .features_std[start_ind : start_ind + dataset.id_num]
+                    .part_features[start_ind : start_ind + dataset.id_num]
                     .clone()
-                    .cpu() 
+                    .cpu()
                 )
-            
+            # if use_gaussion:
+                # memory_features_std.append(
+                #     runner.model.module.roi_head.bbox_head.loss_reid
+                #     .features_std[start_ind : start_ind + dataset.id_num]
+                #     .clone()
+                #     .cpu() 
+                # )
+
             start_ind += dataset.id_num
             
-            if not self.cfg.PSEUDO_LABELS.part_feat.use_part_feat: # 用global特征
+            if not self.cfg.PSEUDO_LABELS.part_feat.use_part_feat:
                 pseudo_labels, label_centers = self.label_generator(
-                    memory_features=memory_features, 
+                    memory_features=memory_features,
+                    part_memory_features=memory_features,
                     image_inds=runner.model.module.roi_head.bbox_head.loss_reid.idx[:len(memory_features[0])].clone().cpu(),
                     cfg=self.cfg
                 )
-                if self.use_inter_cluster:
-                    pseudo_labels = get_uncertainty_by_centroid(pseudo_labels, memory_features, self.logger, self.cfg.PSEUDO_LABELS.inter_cluster.T)
-                    pseudo_labels = [pseudo_labels]
-                    # get_uncertainty_by_centroid(pseudo_labels, memory_features, self.logger, self.cfg.PSEUDO_LABELS.inter_cluster.T)
-
             else:
                 if not self.cfg.PSEUDO_LABELS.part_feat.uncertainty: # hybrid pseudo label
                     pseudo_labels, label_centers = self.label_generator(
-                        memory_features=memory_features, 
+                        memory_features=memory_features,
+                        part_memory_features=part_memory_features,
                         image_inds=runner.model.module.roi_head.bbox_head.loss_reid.idx[:len(memory_features[0])].clone().cpu(),
                         cfg=self.cfg
                     )
-                else:   # 用dual label
+                else:   # Using dual label
+                    # import ipdb;    ipdb.set_trace()
                     pseudo_labels_list = []
                     global_weights = self.cfg.PSEUDO_LABELS.part_feat.global_weights
                     for i in range(len(global_weights)):
                         self.cfg.PSEUDO_LABELS.part_feat.global_weight = global_weights[i]
                         pseudo_labels, _, = self.label_generator(
                             memory_features=memory_features,
+                            part_memory_features=part_memory_features,
                             image_inds=runner.model.module.roi_head.bbox_head.loss_reid.idx[:len(memory_features[0])].clone().cpu(),
                             cfg=self.cfg
                         )
@@ -120,6 +126,10 @@ class ClusterHook(Hook):
                     weight = get_weight_by_uncertainty(uncertainty, pseudo_labels[0])
                     torch.save(weight, os.path.join("saved_file", "weight.pth"))
 
+            if self.use_inter_cluster:
+                pseudo_labels = get_uncertainty_by_centroid(pseudo_labels, memory_features, self.logger, self.cfg.PSEUDO_LABELS.inter_cluster.T)
+                pseudo_labels = [pseudo_labels]
+    
             torch.save(pseudo_labels, os.path.join("saved_file", "pseudo_labels.pth"))
 
         # 统计每个类别的数量，将异常点单独存放在unlabel memory当中
@@ -133,8 +143,12 @@ class ClusterHook(Hook):
             memory_labels.append(torch.LongTensor(labels) + start_pid)
             start_pid += max(labels) + 1
         memory_labels = torch.cat(memory_labels).view(-1)
-            
+    
+        # Initialize the timestamp and the time memory bank to zero
         runner.model.module.roi_head.bbox_head.loss_reid.clock = 0
+        if hasattr(runner.model.module.roi_head.bbox_head.loss_reid, "tflag"):
+            runner.model.module.roi_head.bbox_head.loss_reid._init_tflag()
+ 
         if hasattr(runner.model.module.roi_head.bbox_head.loss_reid, "use_cluster_memory"):
             if hasattr(runner.model.module.roi_head.bbox_head.loss_reid, "cluster_mean"):   # use mean
                 runner.model.module.roi_head.bbox_head.loss_reid._del_cluster()

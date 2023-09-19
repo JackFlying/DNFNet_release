@@ -48,6 +48,7 @@ class ExtractFeatureHook(Hook):
             self.use_feature_std = cfg.USE_STD
         except:
             self.use_feature_std = False
+        self.use_gt_branch_memory_bank = cfg.USE_GT_BRANCH_MEMORY_BANK
         
     def before_run(self, runner):
         if not os.path.exists('saved_file'):
@@ -57,33 +58,33 @@ class ExtractFeatureHook(Hook):
     
         if self.cfg.testing:
             self.dataloader.dataset.id_num = 500
+            
         with torch.no_grad():
             print('feature extract from: ', self.pretrained_feature_file)
-            if self.cfg.model.roi_head.bbox_head.type != 'CoLearningHead':
-                features, img_ids, person_ids, std_features, features_unnorm = self.extract_features(
-                    runner.model, self.dataloader, self.dataloader.dataset, with_path=False, prefix="Extract: ", \
-                    pretrained_feature_file=self.pretrained_feature_file)
-                if self.cfg.save_features:
-                    torch.save(features, os.path.join("saved_file", "features.pth"))
-                    torch.save(person_ids, os.path.join("saved_file", "person_ids.pth"))
+            features, img_ids, person_ids, std_features, features_unnorm, gt_features, gt_part_features = self.extract_features(
+                        runner.model, self.dataloader, self.dataloader.dataset, with_path=False, prefix="Extract: ", \
+                        pretrained_feature_file=self.pretrained_feature_file)
+            if self.cfg.save_features:
+                torch.save(features, os.path.join("saved_file", "features.pth"))
+                torch.save(person_ids, os.path.join("saved_file", "person_ids.pth"))
 
         if self.use_part_feats:
-            # bottom_features = torch.load(os.path.join("saved_file","bottom_features.pth"))
-            # top_features = torch.load(os.path.join("saved_file", "top_features.pth"))
             part_features = torch.load(os.path.join("saved_file", "part_features.pth"))
-            runner.model.module.roi_head.bbox_head.loss_reid._update_part_feature(part_features)
-            # runner.model.module.roi_head.bbox_head.loss_reid._update_bottom_feature(bottom_features)
-            # runner.model.module.roi_head.bbox_head.loss_reid._update_top_feature(top_features)
-        
-        # if self.use_feature_std:
-        #     runner.model.module.roi_head.bbox_head.loss_reid._update_top_feature(top_features)
-        if std_features is not None:
-            runner.model.module.roi_head.bbox_head.loss_reid._update_feature(features, features_unnorm, std_features)
+            if self.use_gt_branch_memory_bank:
+                runner.model.module.roi_head.bbox_head.loss_reid._update_part_feature(gt_part_features)
+            else:
+                runner.model.module.roi_head.bbox_head.loss_reid._update_part_feature(part_features)
+    
+        if self.use_gt_branch_memory_bank:
+            runner.model.module.roi_head.bbox_head.loss_reid._update_feature(gt_features)
         else:
             runner.model.module.roi_head.bbox_head.loss_reid._update_feature(features)
+        # if std_features is not None:
+        #     runner.model.module.roi_head.bbox_head.loss_reid._update_feature(features, features_unnorm, std_features)
+        # else:
+        #     runner.model.module.roi_head.bbox_head.loss_reid._update_feature(features)
         runner.model.module.roi_head.bbox_head.loss_reid._init_ids(img_ids)
         torch.save(img_ids, os.path.join("saved_file", "img_ids.pth"))
-
 
     @torch.no_grad()
     def extract_features(self,
@@ -169,23 +170,27 @@ class ExtractFeatureHook(Hook):
             new_data = {'proposals':data['gt_bboxes'], 'img': data['img'], 'img_metas': data['img_metas'], 'use_crop':False}
             result = model(return_loss=False, rescale=False, **new_data)
             reid_features = torch.from_numpy(result[0][0][:, 5:5+256])
+            
             if self.use_part_feats:
                 part_feats = torch.from_numpy(result[0][0][:, 5+256:5+2*256])
-                # bottom_feats = torch.from_numpy(result[0][0][:, 5+256:5+2*256])
-                # top_feats = torch.from_numpy(result[0][0][:, 5+2*256:5+3*256])
-            if self.use_gfn:
-                scene_feats = torch.from_numpy(result[0][0][:, 5+3*256:5+3*256+2048])
+                
+            if self.use_gt_branch_memory_bank:
+                gt_feats = torch.from_numpy(result[0][0][:, 5+2*256:5+3*256])
+                gt_part_feats = torch.from_numpy(result[0][0][:, 5+3*256:5+4*256])
+
             if self.use_feature_std:
                 std_feats = torch.from_numpy(result[0][0][:, 5+256:5+2*256])
                 
             if normalize:
                 reid_features_norm = F.normalize(reid_features, p=2, dim=-1)
+                
                 if self.use_part_feats:
                     part_feats = F.normalize(part_feats, p=2, dim=-1)
-                    # bottom_feats = F.normalize(bottom_feats, p=2, dim=-1)
-                    # top_feats = F.normalize(top_feats, p=2, dim=-1)
-                if self.use_gfn:
-                    scene_feats = F.normalize(scene_feats, p=2, dim=-1)
+                
+                if self.use_gt_branch_memory_bank:
+                    gt_feats = F.normalize(gt_feats, p=2, dim=-1)
+                    gt_part_feats = F.normalize(gt_part_feats, p=2, dim=-1)
+
 
             if features is None:
                 if self.alliance_clustering or self.uncertainty_estimation:
@@ -193,19 +198,20 @@ class ExtractFeatureHook(Hook):
                 else:
                     features = torch.zeros(dataset.id_num, reid_features.shape[1])
                     features_norm = torch.zeros(dataset.id_num, reid_features_norm.shape[1])
+                    
                     if self.use_part_feats:
                         part_features = torch.zeros(dataset.id_num, part_feats.shape[1])
-                        # bottom_features = torch.zeros(dataset.id_num, bottom_feats.shape[1])
-                        # top_features = torch.zeros(dataset.id_num, top_feats.shape[1])
-                    if self.use_gfn:
-                        scene_features = torch.zeros(dataset.id_num, scene_feats.shape[1])
+                        
+                    if self.use_gt_branch_memory_bank:
+                        gt_features = torch.zeros(dataset.id_num, gt_feats.shape[1])
+                        gt_part_features = torch.zeros(dataset.id_num, gt_part_feats.shape[1])
+
                     if self.use_feature_std:
                         std_features = torch.zeros(dataset.id_num, std_feats.shape[1])
 
             #align gt box and predicted box
             result_boxes = torch.from_numpy(result[0][0][:, :4])
             if result_boxes.shape != gt_bboxes.shape:
-                # print(model.module.roi_head.test_config.nms.iou_threshold)
                 print(result_boxes.shape, gt_bboxes.shape)
                 print(result_boxes)
                 print(gt_bboxes)
@@ -230,10 +236,11 @@ class ExtractFeatureHook(Hook):
             person_ids[gt_ids] = gt_person_ids
             if self.use_part_feats:
                 part_features[gt_ids] = part_feats
-                # bottom_features[gt_ids] = bottom_feats
-                # top_features[gt_ids] = top_feats
-            if self.use_gfn:
-                scene_features[gt_ids] = scene_feats
+
+            if self.use_gt_branch_memory_bank:
+                gt_features[gt_ids] = gt_feats
+                gt_part_features[gt_ids] = gt_part_feats
+
             if self.use_feature_std:
                 std_features[gt_ids] = std_feats
             
@@ -256,9 +263,7 @@ class ExtractFeatureHook(Hook):
         synchronize()
         if self.use_part_feats:
             torch.save(part_features, os.path.join("saved_file", "part_features.pth"))
-            # torch.save(bottom_features, os.path.join("saved_file", "bottom_features.pth"))
-            # torch.save(top_features, os.path.join("saved_file", "top_features.pth"))
-            # torch.save(top_features, os.path.join("saved_file", "scene_features.pth"))
+
 
         if is_dist and cuda:
             # distributed: gather features from all GPUs
@@ -278,9 +283,15 @@ class ExtractFeatureHook(Hook):
             all_img_ids = img_ids
             all_person_ids = person_ids
             all_features_norm = features_norm
+            all_gt_features = None
+            all_gt_part_features = None
+            if self.use_gt_branch_memory_bank:
+                all_gt_features = gt_features
+                all_gt_part_features = gt_part_features
+
             if self.use_feature_std:
                 all_std_features = std_features
             else:
                 all_std_features = None
 
-        return all_features_norm, img_ids, person_ids, all_std_features, all_features
+        return all_features_norm, img_ids, person_ids, all_std_features, all_features, all_gt_features, all_gt_part_features

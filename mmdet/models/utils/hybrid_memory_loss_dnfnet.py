@@ -20,71 +20,71 @@ sys.path.append("/home/linhuadong/DNFNet/mmdet/models/utils")
 from torch.cuda.amp import custom_fwd, custom_bwd
 from itertools import accumulate
 
+
 class HM_part(autograd.Function):
     @staticmethod
     @custom_fwd(cast_inputs=torch.float32)
-    def forward(ctx, inputs, part_inputs, indexes, features, part_features, IoU, top_IoU, bottom_IoU, momentum, IoU_memory_clip, \
-                        update_flag, top_update_flag, bottom_update_flag, update_method):
+    def forward(ctx, inputs, part_inputs, indexes, features, part_features, IoU, momentum, IoU_memory_clip, update_flag,
+                    update_method):
+        
         ctx.features = features
         ctx.part_features = part_features
         ctx.momentum = momentum
+        ctx.update_method = update_method   # Update methods, such as momentum updates
+        ctx.update_flag = update_flag   # If the greedy update strategy is adopted, the features that need to be updated
         ctx.IoU_memory_clip = IoU_memory_clip
-        ctx.update_flag = update_flag
-        ctx.top_update_flag = top_update_flag
-        ctx.bottom_update_flag = bottom_update_flag
-        ctx.update_method = update_method
-
+        # ctx.clock = clock
+        # ctx.tc_winsize = tc_winsize
+        # ctx.intra_cluster_T = intra_cluster_T
+        
         outputs = inputs.mm(ctx.features.t())
         part_outputs = part_inputs.mm(ctx.part_features.t())
 
         all_inputs = all_gather_tensor(inputs)
+        part_inputs = all_gather_tensor(part_inputs)
         all_indexes = all_gather_tensor(indexes)
         all_IoU = all_gather_tensor(IoU)
-        all_top_IoU = all_gather_tensor(top_IoU)
-        all_bottom_IoU = all_gather_tensor(bottom_IoU)
-        part_inputs = all_gather_tensor(part_inputs)
+        # targets = all_gather_tensor(targets)
         
-        IoU_memory_clip = all_gather_tensor(IoU_memory_clip)
-        update_flag = all_gather_tensor(update_flag)
-        top_update_flag = all_gather_tensor(top_update_flag)
-        bottom_update_flag = all_gather_tensor(bottom_update_flag)
-        
-        ctx.save_for_backward(all_inputs, all_indexes, all_IoU, all_top_IoU, all_bottom_IoU,  part_inputs, IoU_memory_clip, \
-                        update_flag, top_update_flag, bottom_update_flag)
+        ctx.save_for_backward(all_inputs, part_inputs, all_indexes, all_IoU)
         return outputs, part_outputs
 
     @staticmethod
     @custom_bwd
     def backward(ctx, grad_outputs, grad_part_outputs):
-        inputs, indexes, IoU, top_IoU, bottom_IoU, part_inputs, IoU_memory_clip, update_flag, top_update_flag, bottom_update_flag = ctx.saved_tensors
-        grad_inputs = None
+        inputs, part_inputs, indexes, IoU = ctx.saved_tensors
+        grad_inputs, grad_part_inputs = None, None
         if ctx.needs_input_grad[0]:
             grad_inputs = grad_outputs.mm(ctx.features)
-            grad_part_outputs = grad_part_outputs.mm(ctx.part_features)
-        
-        IoU = torch.clamp(IoU, min=IoU_memory_clip[0], max=IoU_memory_clip[1])
-        bottom_IoU = torch.clamp(bottom_IoU, min=IoU_memory_clip[0], max=IoU_memory_clip[1])
-        top_IoU = torch.clamp(top_IoU, min=IoU_memory_clip[0], max=IoU_memory_clip[1])
-        for x, y, p, iou, biou, tiou, uf, tuf, buf in zip(inputs, indexes, part_inputs, IoU, bottom_IoU, top_IoU, update_flag, top_update_flag, bottom_update_flag):
-            
+            grad_part_inputs = grad_part_outputs.mm(ctx.part_features)
+        IoU = torch.clamp(IoU, min=ctx.IoU_memory_clip[0], max=ctx.IoU_memory_clip[1])
+
+        for x, px, y, iou, uf in zip(inputs, part_inputs, indexes, IoU, ctx.update_flag):
             if ctx.update_method == "momentum":
                 ctx.features[y] = ctx.momentum * ctx.features[y] + (1.0 - ctx.momentum) * x
-                ctx.part_features[y] = ctx.momentum * ctx.part_features[y] + (1.0 - ctx.momentum) * p
+                ctx.part_features[y] = ctx.momentum * ctx.part_features[y] + (1.0 - ctx.momentum) * px
             elif ctx.update_method == "iou":
                 ctx.features[y] = (1 - iou) * ctx.features[y] + iou * x
+                ctx.part_features[y] = (1 - iou) * ctx.part_features[y] + iou * px
             elif ctx.update_method == "max_iou":
-                if uf: ctx.features[y] = x
+                if uf: 
+                    ctx.features[y] = x
+                    ctx.part_features[y] = px
+            elif ctx.update_method == "max_iou_momentum":
+                if uf: 
+                    ctx.features[y] = ctx.momentum * ctx.features[y] + (1.0 - ctx.momentum) * x
+                    ctx.part_features[y] = ctx.momentum * ctx.part_features[y] + (1.0 - ctx.momentum) * px
             
             ctx.features[y] /= ctx.features[y].norm()
             ctx.part_features[y] /= ctx.part_features[y].norm()
 
-        return grad_inputs, grad_part_outputs, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None
+        return grad_inputs, grad_part_inputs, None, None, None, None, None, None, None, None
 
-def hm_part(inputs, part_inputs, indexes, features,  part_features, momentum, IoU, top_IoU, bottom_IoU, IoU_memory_clip, \
-                    update_flag, top_update_flag, bottom_update_flag, update_method):
+def hm_part(inputs, part_inputs, indexes, features, part_features, IoU, momentum, IoU_memory_clip, \
+                    update_flag, update_method):
     return HM_part.apply(
-        inputs, part_inputs, indexes, features, part_features, IoU, top_IoU, bottom_IoU, torch.Tensor([momentum]).to(inputs.device), \
-                        torch.Tensor(IoU_memory_clip).to(inputs.device), update_flag, top_update_flag, bottom_update_flag, update_method
+        inputs, part_inputs, indexes, features, part_features, IoU, torch.Tensor([momentum]).to(inputs.device), \
+            torch.Tensor(IoU_memory_clip).to(inputs.device), update_flag, update_method
     )
 
 class HM(autograd.Function):
@@ -138,13 +138,16 @@ def hm(inputs, indexes, features, IoU, update_method=None, momentum=0.5, update_
 class HybridMemoryMultiFocalPercentDnfnet(nn.Module):
 
     def __init__(self, num_features, num_memory, temp=0.05, momentum=0.2, cluster_top_percent=0.1, use_cluster_hard_loss=True, testing=False,
-                    IoU_memory_clip=[0.2, 0.9], use_part_feat=False, update_method=None):
+                    IoU_memory_clip=[0.2, 0.9], use_part_feat=False, update_method="max_iou", cluster_mean_method="time_consistency", tc_winsize=500):
         super(HybridMemoryMultiFocalPercentDnfnet, self).__init__()
         self.use_cluster_hard_loss = use_cluster_hard_loss
         self.num_features = num_features
         self.IoU_memory_clip = IoU_memory_clip
         self.use_part_feat = use_part_feat
         self.update_method = update_method
+        self.cluster_mean_method = cluster_mean_method
+        self.tc_winsize = tc_winsize
+        self.clock = 0
 
         if testing == True:
             num_memory = 500
@@ -158,15 +161,17 @@ class HybridMemoryMultiFocalPercentDnfnet(nn.Module):
         self.idx = torch.zeros(num_memory).long()
         self.register_buffer("features", torch.zeros(num_memory, num_features))
         self.register_buffer("labels", torch.zeros(num_memory).long())
-
+        self.register_buffer("tflag", torch.zeros(num_memory).long())
         if self.use_part_feat:
             self.register_buffer("part_features", torch.zeros(num_memory, num_features))
-            # self.register_buffer("bottom_features", torch.zeros(num_memory, num_features))
-            # self.register_buffer("top_features", torch.zeros(num_memory, num_features))
-    
+
     @torch.no_grad()
     def _init_ids(self, ids):
         self.idx[:ids.shape[0]].data.copy_(ids.long().to(self.labels.device))
+
+    @torch.no_grad()
+    def _init_tflag(self):
+        self.tflag.data.copy_(torch.zeros_like(self.tflag).long()).to(self.labels.device)
 
     @torch.no_grad()
     def _update_feature(self, features):
@@ -177,16 +182,6 @@ class HybridMemoryMultiFocalPercentDnfnet(nn.Module):
     def _update_part_feature(self, features):
         features = F.normalize(features, p=2, dim=1)
         self.part_features[:features.shape[0]].data.copy_(features.float().to(self.features.device))
-
-    # @torch.no_grad()
-    # def _update_bottom_feature(self, features):
-    #     features = F.normalize(features, p=2, dim=1)
-    #     self.bottom_features[:features.shape[0]].data.copy_(features.float().to(self.features.device))
-
-    # @torch.no_grad()
-    # def _update_top_feature(self, features):
-    #     features = F.normalize(features, p=2, dim=1)
-    #     self.top_features[:features.shape[0]].data.copy_(features.float().to(self.features.device))
 
     @torch.no_grad()
     def _update_label(self, labels):
@@ -207,7 +202,6 @@ class HybridMemoryMultiFocalPercentDnfnet(nn.Module):
     @torch.no_grad()
     def get_all_cluster_ids(self):
         return self.labels.clone()
-
 
     def masked_softmax_multi_focal(self, vec, mask, dim=1, targets=None, epsilon=1e-6):
         """
@@ -247,29 +241,34 @@ class HybridMemoryMultiFocalPercentDnfnet(nn.Module):
 
     def get_hard_cluster_loss(self, labels, cluster_inputs, targets):
         """
-            :cluster_inputs: [B, N]
+            :cluster_inputs: [B, N], Similarity between the sample and the cluster center
             :targets: [B]
             :labels: [N]
             :IoU: [N]
         """
-        B = cluster_inputs.shape[0]        
+        B = cluster_inputs.shape[0]
+
+        # Local window
+        if self.cluster_mean_method == "time_consistency":
+            tflag_latest = (self.clock - self.tflag) < self.tc_winsize  # [N]
+            cluster_inputs = cluster_inputs[:, tflag_latest == True]    # [B, N']
+            labels = labels[tflag_latest == True]   # [N']
+        # elif self.cluster_mean_method == "soft_time_consistency":
+        #     pass
+
         self.num_memory = labels.shape[0]
-        
         nums = torch.zeros(labels.max() + 1, 1).float().cuda() # many instances belong to a cluster, so calculate the number of instances in a cluster
         nums.index_add_(0, labels, torch.ones(self.num_memory, 1).float().cuda()) # [C], 求每一个簇样本个数
         mask = (nums > 0).float()
-        
-        # # 先求样本之间的相似度,再求和聚类中心的相似度
-        sim = torch.zeros(labels.max() + 1, B).float().cuda() # C * B, unique label num: C = labels.max() + 1表示标签的数量
-        sim.index_add_(0, labels, cluster_inputs.t().contiguous())  # 每一列表示minibatch中instance与同一个簇中所有instance的相似度的和
-        sim /= (mask * nums + (1 - mask)).clone().expand_as(sim) # average features in each cluster, C * B, 与聚类中心的相似度
-        
-        # import ipdb;    ipdb.set_trace()
+
+        sim = torch.zeros(labels.max() + 1, B).float().cuda() # [C, B], C = labels.max() + 1 indicates the number of labels    
+        sim.index_add_(0, labels, cluster_inputs.t().contiguous())  # Each column represents the similarity between instance and cluster
+        sim /= (mask * nums + (1 - mask)).clone().expand_as(sim) # average features in each cluster, C * B
+
         # weight = torch.load(os.path.join('saved_file', 'weight.pth')).cuda()    # [N]
         # weighted_cluster_inputs = cluster_inputs * weight[None]
         # sim = torch.zeros(labels.max() + 1, B).float().cuda() # C * B, unique label num: C = labels.max() + 1表示标签的数量
         # sim.index_add_(0, labels, weighted_cluster_inputs.t().contiguous())  # 每一列表示minibatch中instance与同一个簇中所有instance的相似度的和
-        
         # 求方差
         # cluster_center = self.get_cluster_centroid()    # [C, 256]
         # average_std, average_std_exclude_outliers = self.get_gaussion_distribution(cluster_center)
@@ -278,7 +277,7 @@ class HybridMemoryMultiFocalPercentDnfnet(nn.Module):
         masked_sim = self.masked_softmax_multi_focal(sim.t().contiguous(), mask.t().contiguous(), targets=targets) # sim: u * B, mask:u * B, masked_sim: B * u
         cluster_hard_loss = F.nll_loss(torch.log(masked_sim + 1e-6), targets, reduce=False)
         cluster_hard_loss = cluster_hard_loss.mean()
-        return cluster_hard_loss#, average_std.detach(), average_std_exclude_outliers.detach()
+        return cluster_hard_loss #, average_std.detach(), average_std_exclude_outliers.detach()
 
     def get_gaussion_distribution(self, cluster_center):
         # 求簇的方差
@@ -373,21 +372,21 @@ class HybridMemoryMultiFocalPercentDnfnet(nn.Module):
             :indexes: [B, ]
             :IoU: [B, ]
         """
+        self.clock += 1
+        self.tflag[indexes] = self.clock
 
         update_flag, iou_target = self.get_update_flag(indexes, IoU)
-        top_update_flag, top_iou_target = self.get_update_flag(indexes, top_IoU)
-        bottom_update_flag, bottom_iou_target = self.get_update_flag(indexes, bottom_IoU)
+        # top_update_flag, top_iou_target = self.get_update_flag(indexes, top_IoU)
+        # bottom_update_flag, bottom_iou_target = self.get_update_flag(indexes, bottom_IoU)
 
         losses = {}
         targets = self.labels[indexes].clone()
         labels = self.labels.clone()
-            
         feats = F.normalize(feats, p=2, dim=1)        
         if self.use_part_feat:
             part_feats = F.normalize(part_feats, p=2, dim=1)
-            inputs, part_inputs = hm_part(feats, part_feats, indexes, self.features, self.part_features, self.momentum, IoU, top_IoU, bottom_IoU, \
-                                        self.IoU_memory_clip, update_flag, top_update_flag, bottom_update_flag, self.update_method)   # [B, N]
-        
+            inputs, part_inputs = hm_part(feats, part_feats, indexes, self.features, self.part_features, IoU, self.momentum, \
+                                        self.IoU_memory_clip, update_flag, self.update_method)   # [B, N]
             inputs, part_inputs = inputs / self.temp, part_inputs / self.temp
         else:
             inputs = hm(feats, indexes, self.features, IoU, self.update_method, self.momentum, update_flag, self.IoU_memory_clip)   # [B, N]
