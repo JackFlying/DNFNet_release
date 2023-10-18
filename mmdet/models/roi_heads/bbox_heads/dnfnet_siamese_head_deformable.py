@@ -53,6 +53,7 @@ class DNFNetSiameseHeadDeformable(nn.Module):
                  use_part_feat=False,
                  cluster_mean_method='naive',
                  tc_winsize=500,
+                 decay_weight=-0.001,
                  update_method=None,
                  num_features=256,
                  triplet_weight=1,
@@ -95,7 +96,7 @@ class DNFNetSiameseHeadDeformable(nn.Module):
                                                         IoU_memory_clip, use_part_feat, update_method, cluster_mean_method, tc_winsize)
         else:
             self.loss_reid = HybridMemoryMultiFocalPercentDnfnet(num_features, id_num, temperature, momentum, cluster_top_percent, use_cluster_hard_loss, testing,
-                                                        IoU_memory_clip, use_part_feat, update_method, cluster_mean_method, tc_winsize)
+                                                        IoU_memory_clip, use_part_feat, update_method, cluster_mean_method, tc_winsize, decay_weight)
         self.loss_triplet = Quaduplet2Loss(bg_weight=triplet_bg_weight)
         self.use_quaduplet_loss = use_quaduplet_loss
         self.reid_loss_weight = loss_reid['loss_weight']
@@ -477,9 +478,12 @@ class DNFNetSiameseHeadDeformable(nn.Module):
 
             losses['loss_sim'] = self.cal_sim_loss(pos_id_pred, gt_list_as_pos)
             losses['loss_kl'] = self.cal_kl_loss(pos_id_pred, gt_list_as_pos)
+            # part特征是从global特征分割出来的，所以会相互影响
             if self.use_part_feat:
-                losses['loss_sim_part'] = self.cal_sim_loss(pos_part_id_pred, part_gt_list_as_pos)
-                losses['loss_kl_part'] = self.cal_kl_loss(pos_part_id_pred, part_gt_list_as_pos)
+                self.part_weight = 1.0
+                losses['loss_sim_part'] = self.part_weight * self.cal_sim_loss(pos_part_id_pred, part_gt_list_as_pos)
+                # losses['loss_kl_part'] = self.part_weight * self.cal_kl_loss(pos_part_id_pred, part_gt_list_as_pos)
+                
                 # losses['loss_sim_bottom'] = self.cal_sim_loss(pos_bottom_id_pred, bottom_gt_list_as_pos)
                 # losses['loss_kl_bottom'] = self.cal_kl_loss(pos_bottom_id_pred, bottom_gt_list_as_pos)
                 # losses['loss_sim_top'] = self.cal_sim_loss(pos_top_id_pred, top_gt_list_as_pos)
@@ -510,8 +514,24 @@ class DNFNetSiameseHeadDeformable(nn.Module):
     @force_fp32(apply_to=('pos_id_pred', 'gt_list_as_pos'))
     def cal_sim_loss(self, pos_id_pred, gt_list_as_pos):
         return self.coefficient_sim / len(pos_id_pred) * sum(
-                    1 - pos_id_pred[i].unsqueeze(dim=0) @ gt_list_as_pos[i].unsqueeze(dim=1) for i in
+                    (1 - pos_id_pred[i].unsqueeze(dim=0) @ gt_list_as_pos[i].unsqueeze(dim=1)) for i in
                     range(len(pos_id_pred)))
+
+    # @force_fp32(apply_to=('pos_id_pred', 'gt_list_as_pos', 'IoU'))
+    # def cal_kl_loss(self, pos_id_pred, gt_list_as_pos, IoU):
+    #     sim_pred = pos_id_pred @ pos_id_pred.transpose(0, 1)
+    #     IoU_pair = IoU[:, None] * IoU[None]
+    #     sim_pred = IoU_pair * sim_pred
+    #     sim_gt = gt_list_as_pos @ gt_list_as_pos.transpose(0, 1)
+    #     sim_pred = F.log_softmax(sim_pred, dim=-1)
+    #     sim_gt = F.log_softmax(sim_gt, dim=-1)
+    #     return self.coefficient_kl * F.kl_div(sim_pred, sim_gt, log_target=True) + F.kl_div(sim_gt, sim_pred, log_target=True)
+
+    # @force_fp32(apply_to=('pos_id_pred', 'gt_list_as_pos', 'IoU'))
+    # def cal_sim_loss(self, pos_id_pred, gt_list_as_pos, IoU):
+    #     return self.coefficient_sim / len(pos_id_pred) * sum(
+    #                 IoU[i] * (1 - pos_id_pred[i].unsqueeze(dim=0) @ gt_list_as_pos[i].unsqueeze(dim=1)) for i in
+    #                 range(len(pos_id_pred)))
 
     @force_fp32(apply_to=('cls_score', 'bbox_pred', 'id_pred', 'tmp_feat'))
     def get_bboxes(self,

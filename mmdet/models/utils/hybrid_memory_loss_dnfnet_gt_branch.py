@@ -40,7 +40,7 @@ class HM_part(autograd.Function):
         gt_part_outputs = gt_part_inputs.mm(ctx.part_features.t())
 
         # all_inputs = all_gather_tensor(inputs)
-        # part_inputs = all_gather_tensor(part_inputs)
+        # all_part_inputs = all_gather_tensor(part_inputs)
         all_gt_inputs = all_gather_tensor(gt_inputs)
         all_gt_part_inputs = all_gather_tensor(gt_part_inputs)
         all_indexes = all_gather_tensor(indexes)

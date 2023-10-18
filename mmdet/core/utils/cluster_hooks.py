@@ -107,7 +107,6 @@ class ClusterHook(Hook):
                         cfg=self.cfg
                     )
                 else:   # Using dual label
-                    # import ipdb;    ipdb.set_trace()
                     pseudo_labels_list = []
                     global_weights = self.cfg.PSEUDO_LABELS.part_feat.global_weights
                     for i in range(len(global_weights)):

@@ -55,9 +55,7 @@ class DNFNetHead(nn.Module):
                  use_part_feat=False,
                  cluster_mean_method='naive',
                  tc_winsize=500,
-                 intra_cluster_T=0.1,
-                 use_max_IoU_bbox=False,
-                 instance_top_percent=1.,
+                 decay_weight=-0.001,
                  update_method=None,
                  num_features=256,
                  triplet_weight=1,
@@ -81,7 +79,7 @@ class DNFNetHead(nn.Module):
         self.loss_cls = build_loss(loss_cls)
         self.loss_bbox = build_loss(loss_bbox)
         self.loss_reid = HybridMemoryMultiFocalPercentDnfnet(num_features, id_num, temperature, momentum, cluster_top_percent, use_cluster_hard_loss, testing,
-                                                    IoU_memory_clip, use_part_feat, update_method, cluster_mean_method, tc_winsize)
+                                                    IoU_memory_clip, use_part_feat, update_method, cluster_mean_method, tc_winsize, decay_weight)
         # self.loss_reid = HybridMemoryMultiFocalPercentClusterUnlabeled(num_features, id_num, temperature, momentum, cluster_top_percent, instance_top_percent, use_cluster_hard_loss, testing, \
         #                                                 use_part_feat, use_max_IoU_bbox, update_method, cluster_mean_method, tc_winsize, intra_cluster_T)
         self.loss_triplet = Quaduplet2Loss(bg_weight=triplet_bg_weight)
@@ -281,7 +279,7 @@ class DNFNetHead(nn.Module):
         return update_flag
 
     @auto_fp16()
-    def forward(self, x1, x, part_feats1, part_feats, scene_emb1, scene_emb2, labels, rois, bbox_targets):
+    def forward(self, x1, x, part_feats1, part_feats, labels, rois, bbox_targets):
         x = x.view(x.size(0), -1)
         x1 = x1.view(x1.size(0), -1)
         cls_score = self.fc_cls(x) if self.with_cls else None
@@ -316,11 +314,6 @@ class DNFNetHead(nn.Module):
                 id_pred = torch.cat((id_feat1, id_feat2), axis=1)
                 id_pred = self.normalize(id_pred)
         
-        scene_embed, query_embed = None, None
-        # if self.use_gfn:
-            # query_embed = F.normalize(torch.cat((self.query_feature(x), self.query_feature1(x1)), axis=1))
-            # scene_embed = F.normalize(torch.cat((self.scene_feature(scene_emb1), self.scene_feature1(scene_emb2)), axis=1))
-
         part_id_pred = None
         if part_feats1 is not None:
             part_id_pred = []
@@ -341,7 +334,7 @@ class DNFNetHead(nn.Module):
                 part_id_pred.append(id_feat)
             part_id_pred = torch.stack(part_id_pred, dim=1) # [N, part_nums, D]
             part_id_pred = torch.mean(part_id_pred, dim=1)  # [N, D]
-        return cls_score, bbox_pred, id_pred, part_id_pred, scene_embed, query_embed
+        return cls_score, bbox_pred, id_pred, part_id_pred
 
 
     def _get_target_single_crop(self, pos_bboxes, neg_bboxes, pos_gt_bboxes, 
@@ -553,12 +546,15 @@ class DNFNetHead(nn.Module):
 
         rid_pred = id_pred[id_labels!=-2]
         rid_labels = id_labels[id_labels!=-2]
-        rpart_feats = part_feats[id_labels!=-2]
+        if part_feats is not None:
+            rpart_feats = part_feats[id_labels!=-2]
+        else:
+            rpart_feats = None
         
         memory_loss = self.loss_reid(rid_pred, rpart_feats, rid_labels, IoU, top_IoU, bottom_IoU)
         memory_loss['global_cluster_loss'] *= self.reid_loss_weight
         memory_loss["part_cluster_loss"] *= self.reid_loss_weight
-
+        
         losses.update(memory_loss)
 
         if self.use_quaduplet_loss:
@@ -566,7 +562,7 @@ class DNFNetHead(nn.Module):
             new_id_labels = id_labels.clone()
             new_id_labels[id_labels != -2] = cluster_id_labels
             losses['global_triplet_loss'] = self.loss_triplet(id_pred, new_id_labels) * self.triplet_weight
-
+        # print(losses)
         return losses
 
     @force_fp32(apply_to=('cls_score', 'bbox_pred', 'id_pred', 'tmp_feat'))

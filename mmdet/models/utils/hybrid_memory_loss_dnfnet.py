@@ -138,7 +138,8 @@ def hm(inputs, indexes, features, IoU, update_method=None, momentum=0.5, update_
 class HybridMemoryMultiFocalPercentDnfnet(nn.Module):
 
     def __init__(self, num_features, num_memory, temp=0.05, momentum=0.2, cluster_top_percent=0.1, use_cluster_hard_loss=True, testing=False,
-                    IoU_memory_clip=[0.2, 0.9], use_part_feat=False, update_method="max_iou", cluster_mean_method="time_consistency", tc_winsize=500):
+                    IoU_memory_clip=[0.2, 0.9], use_part_feat=False, update_method="max_iou", cluster_mean_method="time_consistency", \
+                        tc_winsize=500, decay_weight=-0.001):
         super(HybridMemoryMultiFocalPercentDnfnet, self).__init__()
         self.use_cluster_hard_loss = use_cluster_hard_loss
         self.num_features = num_features
@@ -148,6 +149,7 @@ class HybridMemoryMultiFocalPercentDnfnet(nn.Module):
         self.cluster_mean_method = cluster_mean_method
         self.tc_winsize = tc_winsize
         self.clock = 0
+        self.decay_weight = decay_weight
 
         if testing == True:
             num_memory = 500
@@ -253,8 +255,19 @@ class HybridMemoryMultiFocalPercentDnfnet(nn.Module):
             tflag_latest = (self.clock - self.tflag) < self.tc_winsize  # [N]
             cluster_inputs = cluster_inputs[:, tflag_latest == True]    # [B, N']
             labels = labels[tflag_latest == True]   # [N']
-        # elif self.cluster_mean_method == "soft_time_consistency":
-        #     pass
+        elif self.cluster_mean_method == "soft_time_consistency":
+            def time_func(x, x1, x2, a):
+                """
+                    (x1, a) and (x2, 1) are two points that determine a straight line
+                """
+                return (x - x2) / (x1 - x2) * (a - 1) + 1
+
+            # self.decay_weight Control weight_floor. -0.00x indicates that every x00 iteration, weight_floor decays 0.1
+            # The greater the interval, the smaller the weight_min
+            weight_min = self.decay_weight * (self.tflag.max() - self.tflag.min()) + 1   # pass through (0, 1) and (100, 1 - 0.x)
+            # A line passing through the points (self.tflag.min(), weight_min) and (self.tflag.max(), 1)
+            time_weight = time_func(self.tflag, self.tflag.min(), self.tflag.max(), weight_min)
+            cluster_inputs = cluster_inputs * time_weight   # [B, N] * [:, N] => [B, N], 降低query和久远特征之间的相似度
 
         self.num_memory = labels.shape[0]
         nums = torch.zeros(labels.max() + 1, 1).float().cuda() # many instances belong to a cluster, so calculate the number of instances in a cluster

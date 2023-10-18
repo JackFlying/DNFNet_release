@@ -48,7 +48,10 @@ class ExtractFeatureHook(Hook):
             self.use_feature_std = cfg.USE_STD
         except:
             self.use_feature_std = False
-        self.use_gt_branch_memory_bank = cfg.USE_GT_BRANCH_MEMORY_BANK
+        try:
+            self.use_gt_branch_memory_bank = cfg.USE_GT_BRANCH_MEMORY_BANK
+        except:
+            self.use_gt_branch_memory_bank = False
         
     def before_run(self, runner):
         if not os.path.exists('saved_file'):
@@ -166,7 +169,7 @@ class ExtractFeatureHook(Hook):
                 person_ids[gt_ids] = gt_person_ids  # For PRW datasets
                 prog_bar.update()
                 continue
-                
+            # import ipdb;    ipdb.set_trace()
             new_data = {'proposals':data['gt_bboxes'], 'img': data['img'], 'img_metas': data['img_metas'], 'use_crop':False}
             result = model(return_loss=False, rescale=False, **new_data)
             reid_features = torch.from_numpy(result[0][0][:, 5:5+256])
@@ -191,7 +194,6 @@ class ExtractFeatureHook(Hook):
                     gt_feats = F.normalize(gt_feats, p=2, dim=-1)
                     gt_part_feats = F.normalize(gt_part_feats, p=2, dim=-1)
 
-
             if features is None:
                 if self.alliance_clustering or self.uncertainty_estimation:
                     features = torch.zeros(2 * dataset.id_num, reid_features.shape[1])
@@ -208,6 +210,7 @@ class ExtractFeatureHook(Hook):
 
                     if self.use_feature_std:
                         std_features = torch.zeros(dataset.id_num, std_feats.shape[1])
+                    img_metas = {}
 
             #align gt box and predicted box
             result_boxes = torch.from_numpy(result[0][0][:, :4])
@@ -234,6 +237,7 @@ class ExtractFeatureHook(Hook):
             features_norm[gt_ids] = reid_features_norm
             img_ids[gt_ids] = gt_img_ids
             person_ids[gt_ids] = gt_person_ids
+            img_metas[gt_ids] = data['img_metas']
             if self.use_part_feats:
                 part_features[gt_ids] = part_feats
 
@@ -264,7 +268,6 @@ class ExtractFeatureHook(Hook):
         if self.use_part_feats:
             torch.save(part_features, os.path.join("saved_file", "part_features.pth"))
 
-
         if is_dist and cuda:
             # distributed: gather features from all GPUs
             all_features = all_gather_tensor(features.cuda(), save_memory=save_memory)
@@ -293,5 +296,8 @@ class ExtractFeatureHook(Hook):
                 all_std_features = std_features
             else:
                 all_std_features = None
+                
+        torch.save(all_person_ids, os.path.join("saved_file", "person_ids.pth"))
+        torch.save(img_metas, os.path.join("saved_file", "img_metas.pth"))
 
         return all_features_norm, img_ids, person_ids, all_std_features, all_features, all_gt_features, all_gt_part_features

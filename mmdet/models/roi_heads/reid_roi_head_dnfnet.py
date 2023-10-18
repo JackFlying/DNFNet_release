@@ -187,12 +187,11 @@ class ReidRoIHeadDNFNet(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
         #         RoI_Align_feat = bbox_feats.detach()    # visualize heat map
         #     bbox_feats = F.adaptive_max_pool2d(bbox_feats, 1)   # [N, 2048, 1, 1]
 
-        RoI_Align_feat = None
+        RoI_Align_feat, part_feats_list, part_feats1_list = None, None, None
         bbox_feats = self.bbox_roi_extractor(x[:self.bbox_roi_extractor.num_inputs], rois)   # [N, 1024, 14, 14], [14, 14]表示[height, width]
         bbox_feats1 = F.adaptive_max_pool2d(bbox_feats, 1).squeeze(-1).squeeze(-1)  # [N, 1024, 1, 1]
         if self.use_part_feat:
             part_num = 2
-            # part_height = bbox_feats.shape[2] // part_num
             part_height = bbox_feats.shape[2] - 1
             part_feats_list = [bbox_feats[:, :, i:i+part_height, :] for i in range(part_num)]   # N, 1024, 7, 14]
             part_feats1_list = [F.adaptive_max_pool2d(x, 1) for x in part_feats_list]  # 2 * [N, 1024, 1, 1]
@@ -206,7 +205,7 @@ class ReidRoIHeadDNFNet(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
             if self.use_RoI_Align_feat:
                 RoI_Align_feat = bbox_feats.detach()    # visualize heat map
 
-        scene_emb, scene_emb1, scene_emb2, gfn_losses = None, None, None, torch.tensor(0.)
+        # scene_emb, scene_emb1, scene_emb2, gfn_losses = None, None, None, torch.tensor(0.)
         # if self.use_gfn:
         #     scene_emb1 = F.adaptive_max_pool2d(x[0], 1).squeeze(-1).squeeze(-1) # x[0]=[N, 1024, H, W] => [N, 1024, 1, 1]
         #     if self.with_shared_head:
@@ -214,14 +213,9 @@ class ReidRoIHeadDNFNet(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
         #         scene_emb2 = self.shared_head(x[0])
         #         scene_emb2 = F.adaptive_max_pool2d(scene_emb2, 1).squeeze(-1).squeeze(-1) # [N, 2048, 1, 1]
         #         scene_emb = self.embedding_head({'feat_res4':scene_emb1, 'feat_res5':scene_emb2})[0]
-    
-        # cls_score, bbox_pred, id_pred, part_id_pred, _, query_embed = self.bbox_head(bbox_feats1, bbox_feats, part_feats1, part_feats, scene_emb1, scene_emb2, labels, rois, bbox_targets) # [N, 256]
-        cls_score, bbox_pred, id_pred, part_id_pred, _, query_embed = self.bbox_head(bbox_feats1, bbox_feats, part_feats1_list, part_feats_list, scene_emb1, scene_emb2, labels, rois, bbox_targets) # [N, 256]
-        # if self.use_gfn and self.training:
-        #     gfn_losses = self.bbox_head.gfn_forward(scene_emb, query_embed, labels)
-
+        cls_score, bbox_pred, id_pred, part_id_pred = self.bbox_head(bbox_feats1, bbox_feats, part_feats1_list, part_feats_list, labels, rois, bbox_targets) # [N, 256]
         bbox_results = dict(cls_score=cls_score, bbox_pred=bbox_pred, bbox_feats=bbox_feats, id_pred=id_pred, \
-                            RoI_Align_feat=RoI_Align_feat, part_id_pred=part_id_pred, scene_emb=scene_emb, gfn_losses=gfn_losses)
+                            RoI_Align_feat=RoI_Align_feat, part_id_pred=part_id_pred)
         
         return bbox_results
 
@@ -233,25 +227,14 @@ class ReidRoIHeadDNFNet(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
         bbox_targets = self.bbox_head.get_targets(sampling_results, gt_bboxes,
                                                   gt_labels, self.train_cfg, **kwargs)
         labels = bbox_targets[0]
-        # print("labels", labels.shape)
         bbox_results = self._bbox_forward(x, rois, labels, bbox_targets)
-        # if self.use_global_Local_context:
-        #     loss_bbox = self.bbox_head.loss(bbox_results['cls_score_logit'],
-        #                                     bbox_results['bbox_pred'],
-        #                                     bbox_results['id_pred'], 
-        #                                     rois,
-        #                                     *bbox_targets,
-        #                                     **kwargs)
-        # else:
         loss_bbox = self.bbox_head.loss(bbox_results['cls_score'],
                                         bbox_results['bbox_pred'],
                                         bbox_results['id_pred'], 
                                         bbox_results['part_id_pred'],
                                         rois,
-                                        # crop_targets=None,
                                         *bbox_targets,
                                         **kwargs)
-        loss_bbox.update(gfn_losses=bbox_results['gfn_losses'])
         bbox_results.update(loss_bbox=loss_bbox)
         return bbox_results
 
@@ -360,7 +343,6 @@ class ReidRoIHeadDNFNet(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
         id_pred = bbox_results['id_pred']
         RoI_Align_feat = bbox_results['RoI_Align_feat']
         part_id_pred = bbox_results['part_id_pred']
-        scene_emb = bbox_results['scene_emb']
 
         num_proposals_per_img = tuple(len(p) for p in proposals)
         rois = rois.split(num_proposals_per_img, 0)
@@ -369,8 +351,8 @@ class ReidRoIHeadDNFNet(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
         bbox_pred = bbox_pred.split(num_proposals_per_img,0) if bbox_pred is not None else [None, None]
         id_pred = id_pred.split(num_proposals_per_img, 0)
         
-        if scene_emb is not None:
-            scene_emb = scene_emb.repeat(num_proposals_per_img[0], 1)
+        # if scene_emb is not None:
+        #     scene_emb = scene_emb.repeat(num_proposals_per_img[0], 1)
         
         if RoI_Align_feat is not None:
             RoI_Align_feat = RoI_Align_feat.split(num_proposals_per_img, 0)
@@ -388,49 +370,36 @@ class ReidRoIHeadDNFNet(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
         # apply bbox post-processing to each image individually
         det_bboxes = []
         det_labels = []
-        if self.bbox_head_cfg.type == 'CoLearningHead':
-            for i in range(len(proposals)):
+        for i in range(len(proposals)):
+            if part_id_pred is None:
                 det_bbox, det_label = self.bbox_head.get_bboxes(
                     rois[i],
                     cls_score[i],
                     bbox_pred[i],
                     id_pred[i],
-                    id_pred2[i],
+                    None,
+                    # RoI_Align_feat[i].view(RoI_Align_feat[i].shape[0], -1),  # [2048, 7, 7]
                     img_shapes[i],
                     scale_factors[i],
                     rescale=rescale,
                     cfg=rcnn_test_cfg)
                 det_bboxes.append(det_bbox)
                 det_labels.append(det_label)
-        else:
-            for i in range(len(proposals)):
-                if scene_emb is not None:
-                    det_bbox, det_label = self.bbox_head.get_bboxes(
-                        rois[i],
-                        cls_score[i],
-                        bbox_pred[i],
-                        id_pred[i],
-                        # RoI_Align_feat[i].view(RoI_Align_feat[i].shape[0], -1),  # [2048, 7, 7]
-                        torch.cat([part_id_pred[i], scene_emb], dim=1),
-                        img_shapes[i],
-                        scale_factors[i],
-                        rescale=rescale,
-                        cfg=rcnn_test_cfg)
-                else:
-                    det_bbox, det_label = self.bbox_head.get_bboxes(
-                        rois[i],
-                        cls_score[i],
-                        bbox_pred[i],
-                        id_pred[i],
-                        # RoI_Align_feat[i].view(RoI_Align_feat[i].shape[0], -1),  # [2048, 7, 7]
-                        part_id_pred[i],
-                        img_shapes[i],
-                        scale_factors[i],
-                        rescale=rescale,
-                        cfg=rcnn_test_cfg)
-                
+            else:
+                det_bbox, det_label = self.bbox_head.get_bboxes(
+                    rois[i],
+                    cls_score[i],
+                    bbox_pred[i],
+                    id_pred[i],
+                    part_id_pred[i],
+                    # RoI_Align_feat[i].view(RoI_Align_feat[i].shape[0], -1),  # [2048, 7, 7]
+                    img_shapes[i],
+                    scale_factors[i],
+                    rescale=rescale,
+                    cfg=rcnn_test_cfg)
                 det_bboxes.append(det_bbox)
                 det_labels.append(det_label)
+
         return det_bboxes, det_labels
 
     def simple_test(self,
