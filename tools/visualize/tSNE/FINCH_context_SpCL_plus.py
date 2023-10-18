@@ -10,7 +10,6 @@ import torch
 import torch.nn.functional as F
 import collections
 from tqdm import tqdm
-import os
 
 try:
     from pynndescent import NNDescent
@@ -23,12 +22,16 @@ except Exception as e:
 
 ANN_THRESHOLD = 70000
 
-def clust_rank(mat, initial_rank=None, distance='cosine'):  # cosine: 1 - cos
+def clust_rank(mat, part_mat, initial_rank=None, distance='cosine', cfg=None, intra_context_mask=None):  # cosine: 1 - cos
     s = mat.shape[0]
     if initial_rank is not None:
         orig_dist = np.array([])
     elif s <= ANN_THRESHOLD:
         orig_dist = metrics.pairwise.pairwise_distances(mat, mat, metric=distance)
+        part_orig_dist = metrics.pairwise.pairwise_distances(part_mat, part_mat, metric=distance)
+        global_weight = cfg.PSEUDO_LABELS.part_feat.global_weight
+        part_weight = 1 - global_weight
+        orig_dist = global_weight * orig_dist + part_weight * part_orig_dist
         np.fill_diagonal(orig_dist, 1e12)
         initial_rank = np.argmin(orig_dist, axis=1) # 这里计算相似度越高就为0
     else:
@@ -87,17 +90,15 @@ def cool_mean(M, u):
     umat = sp.csr_matrix((np.ones(s, dtype='float32'), (np.arange(0, s), u)), shape=(s, len(un)))
     return (umat.T @ M) / nf[..., np.newaxis]
 
-
-def get_merge(c, u, data):
+def get_merge(c, u, data, part_data):
     if len(c) != 0:
         _, ig = np.unique(c, return_inverse=True)
         c = u[ig]
     else:
         c = u
-
     mat = cool_mean(data, c)
-    return c, mat
-
+    pmat = cool_mean(part_data, c)
+    return c, mat, pmat
 
 def update_adj(adj, d):
     # Update adj, keep one merge at a time
@@ -122,7 +123,7 @@ def req_numclust(c, data, req_clust, distance):
     return c_
 
 
-def FINCH(data, initial_rank=None, req_clust=None, distance='cosine', ensure_early_exit=True, verbose=True):
+def FINCH(data_list, initial_rank=None, req_clust=None, distance='cosine', ensure_early_exit=True, verbose=True, cfg=None, intra_context_mask=None):
     """ FINCH clustering algorithm.
     :param data: Input matrix with features in rows.
     :param initial_rank: Nx1 first integer neighbor indices (optional).
@@ -145,17 +146,23 @@ def FINCH(data, initial_rank=None, req_clust=None, distance='cosine', ensure_ear
     Karlsruhe Institute of Technology (KIT)
     """
     # Cast input data to float32
+    # data, bottom_data, top_data = data_list
+    data, part_data = data_list
     data = np.array(data.cpu())
+    part_data = np.array(part_data.cpu())
+    intra_context_mask = np.array(intra_context_mask.cpu())
+    
     if initial_rank is not None:
         initial_rank = np.array(initial_rank.cpu())
     
     data = data.astype(np.float32)
+    part_data = part_data.astype(np.float32)
 
     min_sim = None
-    adj, orig_dist = clust_rank(data, initial_rank, distance)
+    adj, orig_dist = clust_rank(data, part_data, initial_rank, distance, cfg, intra_context_mask)
     initial_rank = None
     group, num_clust = get_clust(adj, [], min_sim)
-    c, mat = get_merge([], group, data)
+    c, mat, pmat = get_merge([], group, data, part_data) # 求聚类中心
 
     if verbose:
         print('Partition 0: {} clusters'.format(num_clust))
@@ -170,9 +177,9 @@ def FINCH(data, initial_rank=None, req_clust=None, distance='cosine', ensure_ear
     num_clust = [num_clust]
 
     while exit_clust > 1:
-        adj, orig_dist = clust_rank(mat, initial_rank, distance)
+        adj, orig_dist = clust_rank(mat, pmat, initial_rank, distance, cfg)
         u, num_clust_curr = get_clust(adj, orig_dist, min_sim)
-        c_, mat = get_merge(c_, u, data)
+        c_, mat, pmat = get_merge(c_, u, data, part_data)
 
         num_clust.append(num_clust_curr)
         c = np.column_stack((c, c_))
@@ -198,17 +205,15 @@ def FINCH(data, initial_rank=None, req_clust=None, distance='cosine', ensure_ear
 
     return c, num_clust, req_c
 
-
 def list_duplicates(seq):
     tally = collections.defaultdict(list)
     for i,item in enumerate(seq):
         tally[item].append(i)
-    dups = [(key,locs) for key,locs in tally.items() if len(locs)>1]
+    dups = [(key,locs) for key,locs in tally.items() if len(locs)>1]    # key表示簇的label,locs表示簇中样本的index
     return dups
 
-
 @torch.no_grad()
-def process_label_with_context(labels, centers, features, inds, num_classes):
+def process_label_with_intra_context(labels, centers, features, inds, num_classes):
     # if the persons in the same image are clustered in the same clust, remove it
     N_p = features.shape[0]
     N_c = centers.shape[0]
@@ -216,25 +221,34 @@ def process_label_with_context(labels, centers, features, inds, num_classes):
     assert N_p == labels.shape[0]
     assert N_p == inds.shape[0]
     unique_inds = set(inds.cpu().numpy())
+    print("num_classes_pre", num_classes)
     for uid in unique_inds: # image idx
+        if(uid == 0):
+            continue
         b = (inds == uid)
         tmp_id = b.nonzero()
-        tmp_labels = labels[tmp_id] # instance belong to same image
+        tmp_labels = labels[tmp_id] # instance label belong to same image
         dups = list_duplicates(list(tmp_labels.squeeze(1).cpu().numpy()))
         if len(dups) > 0:
             for dup in dups:
+                # dup[0]表示簇标签, dup[1]表示属于该簇同时属于同一张图片的样本
                 tmp_center = centers[dup[0]].cpu().numpy()
+                # TODO 重新求聚类中心，去除掉待筛选的样本
+                # is_selected = (labels == dup[0])
+                # is_selected[tmp_id[dup[1]].squeeze(1)] = False
+                # tmp_center = features[is_selected].mean(0)
+                
                 tmp_features = features[tmp_id[dup[1]].squeeze(1)].cpu().numpy()
                 sim = np.dot(tmp_center, tmp_features.transpose())
                 idx = np.argmax(sim)
                 for i in range(len(sim)):
                     if i != idx:
                         labels[tmp_id[dup[1][i]]] = num_classes
-                        centers = torch.cat((centers, features[tmp_id[dup[1][i]]]))
+                        centers = torch.cat((centers, features[tmp_id[dup[1][i]]])) # 增加聚类中心，实际上为异常点的中心
                         num_classes += 1
+    print("num_classes_after", num_classes)
     assert num_classes == centers.shape[0]
     return labels, centers, num_classes
-
 
 @torch.no_grad()
 def generate_cluster_features(labels, features):
@@ -243,12 +257,12 @@ def generate_cluster_features(labels, features):
         if label == -1:
             continue
         centers[labels[i]].append(features[i])
+    # import ipdb;    ipdb.set_trace()
     centers = [
         torch.stack(centers[idx], dim=0).mean(0) for idx in sorted(centers.keys())
     ]
     centers = torch.stack(centers, dim=0)
     return centers
-
 
 def get_img_sim_by_max(inst_sim_matrix, split_num):
     """
@@ -298,7 +312,6 @@ def get_img_sim_by_mean(inst_sim_matrix, split_num, threshold):
     img2img_sim = torch.stack(img2img_sim, dim=0)
     return img2img_sim
 
-
 def get_extend_sim_matrix(sim, split_num):
     inst2img_sim = []
     for i in range(len(split_num)):
@@ -311,7 +324,7 @@ def get_extend_sim_matrix(sim, split_num):
     img2img_sim_extend = torch.cat(img2img_sim_extend, dim=0)
     return img2img_sim_extend
 
-def get_hybrid_sim(inst_sim_matrix, split_num, person_sim, scene_sim, lambda_person, lambda_scene):
+def get_hybrid_sim(inst_sim_matrix, split_num, person_sim, scene_sim, lambda_person, lambda_scene, intra_context_mask):
     """
         将上下文相似度加到视觉相似度上面
         1. 将上下文相似度维度进行扩充满足视觉相似度
@@ -323,26 +336,27 @@ def get_hybrid_sim(inst_sim_matrix, split_num, person_sim, scene_sim, lambda_per
     # 将对角线位置填充为负无穷大,自身不能作为最近邻
     hybrid_sim_matrix_ = hybrid_sim_matrix.clone()
     hybrid_sim_matrix_ = hybrid_sim_matrix_.fill_diagonal_(-100.)
+    # hybrid_sim_matrix_[intra_context_mask == False] = -100
     _, initial_rank = torch.max(hybrid_sim_matrix_, dim=-1)
     return hybrid_sim_matrix, initial_rank
 
 @torch.no_grad()
-def label_generator_FINCH_context_single(iters, features, initial_rank, all_inds=None):
-
-    labels_set, num_classes_set, req_c = FINCH(features, initial_rank=initial_rank, req_clust=None, distance='cosine', ensure_early_exit=True, verbose=True)
+def label_generator_FINCH_context_single(cfg, iters, features_list, initial_rank, all_inds, intra_context_mask):
+    features = features_list[0].cpu()
+    labels_set, num_classes_set, req_c = FINCH(features_list, initial_rank=initial_rank, req_clust=None, distance='cosine', ensure_early_exit=True, verbose=True, cfg=cfg, intra_context_mask=intra_context_mask)
     labels = torch.from_numpy(labels_set[:, iters]).long()
     num_classes = num_classes_set[iters]
-    centers = generate_cluster_features(torch.unique(labels), features)
-    labels, _, num_classes = process_label_with_context(labels, centers, features, all_inds, num_classes)
-    return labels, centers, num_classes
+    centers = generate_cluster_features(labels.tolist(), features)
+    labels, _, num_classes = process_label_with_intra_context(labels, centers, features, all_inds, num_classes)
+    return labels, _, num_classes
 
 @torch.no_grad()
-def label_generator_FINCH_context_SpCL(cfg, features, initial_rank, cuda=True, indep_thres=None, all_inds=None, **kwargs):
+def label_generator_FINCH_context_SpCL(cfg, features_list, initial_rank, cuda=True, indep_thres=None, all_inds=None, intra_context_mask=None, **kwargs):
     iters = kwargs.get("iters", [0, 1, 2])
-    features = features.cpu()
-    labels_tight, centers_tight, num_classes_tight = label_generator_FINCH_context_single(iters[2], features, initial_rank, all_inds=all_inds)
-    labels_normal, centers_normal, num_classes = label_generator_FINCH_context_single(iters[1], features, initial_rank, all_inds=all_inds)
-    labels_loose, centers_loose, num_classes_loose = label_generator_FINCH_context_single(iters[0], features, initial_rank, all_inds=all_inds)
+    features = features_list[0].cpu()
+    labels_tight, _, num_classes_tight = label_generator_FINCH_context_single(cfg, iters[2], features_list, initial_rank, all_inds, intra_context_mask)
+    labels_normal, _, num_classes = label_generator_FINCH_context_single(cfg, iters[1], features_list, initial_rank, all_inds, intra_context_mask)
+    labels_loose, _, num_classes_loose = label_generator_FINCH_context_single(cfg, iters[0], features_list, initial_rank, all_inds, intra_context_mask)
 
     # compute R_indep and R_comp
     N = labels_normal.size(0)
@@ -418,11 +432,11 @@ def label_generator_FINCH_context_SpCL(cfg, features, initial_rank, cuda=True, i
         torch.stack(centers[idx], dim=0).mean(0) for idx in sorted(centers.keys())
     ]
     centers = torch.stack(centers, dim=0)
-
+    
     return labels_normal, centers, num_classes, indep_thres
 
 @torch.no_grad()
-def label_generator_FINCH_context_SpCL_Plus(cfg, features, cuda=True, indep_thres=None, all_inds=None, **kwargs):
+def label_generator_FINCH_context_SpCL_Plus(cfg, features, part_features, cuda=True, indep_thres=None, all_inds=None, **kwargs):
 
     unique_inds = set(all_inds.cpu().numpy())
     split_num = torch.zeros(len(unique_inds)).long()
@@ -431,39 +445,36 @@ def label_generator_FINCH_context_SpCL_Plus(cfg, features, cuda=True, indep_thre
     split_num = split_num.tolist()
     
     instance_sim = features.mm(features.t())
+    # part_features = features
     if cfg.PSEUDO_LABELS.part_feat.use_part_feat:
-        path = "/home/linhuadong/DNFNet/jobs/prw_protonorm5/"
         print("-------------------------part based clustering---------------------------------")
-        bottom_features = torch.load(os.path.join(path, "saved_file/bottom_features.pth"))
-        top_features = torch.load(os.path.join(path, "saved_file/top_features.pth"))
         global_weight = cfg.PSEUDO_LABELS.part_feat.global_weight
-        bottom_feat_sim = bottom_features.mm(bottom_features.t())
-        top_feat_sim = top_features.mm(top_features.t())
-        instance_sim = global_weight * instance_sim +  (1 - global_weight) / 2 * bottom_feat_sim + (1 - global_weight) / 2 * top_feat_sim
+        part_weight = 1 - global_weight
+        # part_features = torch.load("./saved_file/part_features.pth")
+        part_feat_sim = part_features.mm(part_features.t())
+        instance_sim = global_weight * instance_sim + part_weight * part_feat_sim
 
     person_sim = torch.zeros(len(unique_inds), len(unique_inds))
-    # if cfg.PSEUDO_LABELS.context_method == "max":
-    #     img_sim = get_img_sim_by_max(instance_sim, split_num)
-    # elif cfg.PSEUDO_LABELS.context_method == "mean":
-    #     img_sim = get_img_sim_by_mean(instance_sim, split_num, cfg.PSEUDO_LABELS.threshold)
-    # elif cfg.PSEUDO_LABELS.context_method == "zero":
-    #     img_sim = torch.zeros(len(unique_inds), len(unique_inds))
-    # elif cfg.PSEUDO_LABELS.context_method == "scene":
-    #     scene_features = torch.load("./saved_file/scene_features.pth")
-    #     scene_sim = scene_features.mm(scene_features.t())
-        # print("scene_sim", scene_sim[:50][:50])
+    if cfg.PSEUDO_LABELS.context_method == "max":
+        img_sim = get_img_sim_by_max(instance_sim, split_num)
+    elif cfg.PSEUDO_LABELS.context_method == "mean":
+        img_sim = get_img_sim_by_mean(instance_sim, split_num, cfg.PSEUDO_LABELS.threshold)
+    elif cfg.PSEUDO_LABELS.context_method == "zero":
+        img_sim = torch.zeros(len(unique_inds), len(unique_inds))
+    elif cfg.PSEUDO_LABELS.context_method == "scene":
+        scene_features = torch.load("./saved_file/scene_features.pth")
+        scene_sim = scene_features.mm(scene_features.t())
 
-    # if cfg.PSEUDO_LABELS.context_clip:
-    #     scene_sim = scene_sim * (scene_sim > cfg.PSEUDO_LABELS.threshold)
-    
-    scene_sim = torch.zeros(len(unique_inds), len(unique_inds))
-    hybrid_instance_sim, initial_rank = get_hybrid_sim(instance_sim, split_num, person_sim, scene_sim, 0., cfg.PSEUDO_LABELS.lambda_scene)
+    # jaccard_coeff = 0.1
+    # jaccard_dist = re_ranking_for_instance(features, k1=100)
+    # instance_sim = (1 - jaccard_coeff) * instance_sim + jaccard_coeff * jaccard_dist
+
+    intra_context_mask = get_intra_context_mask(all_inds)
+    hybrid_instance_sim, initial_rank = get_hybrid_sim(instance_sim, split_num, person_sim, img_sim, 0., cfg.PSEUDO_LABELS.lambda_scene, intra_context_mask)
     if cfg.PSEUDO_LABELS.SpCL:
-        labels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, features, initial_rank, cuda, indep_thres, all_inds, **kwargs)
+        labels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, [features, part_features], initial_rank, cuda, indep_thres, all_inds, intra_context_mask, **kwargs)
     else:
-        labels, centers, num_classes = label_generator_FINCH_context_single(0, features, initial_rank, all_inds=all_inds)
-    # if cfg.PSEUDO_LABELS.use_post_process:
-    #     labels, centers, num_classes = post_process(cfg, labels, hybrid_instance_sim, features)
+        labels, centers, num_classes = label_generator_FINCH_context_single(cfg, 0, [features, part_features], initial_rank, all_inds, intra_context_mask)
 
     for i in range(cfg.PSEUDO_LABELS.iters):
         print("clustering iteration: {}".format(i + 1))
@@ -478,59 +489,89 @@ def label_generator_FINCH_context_SpCL_Plus(cfg, features, cuda=True, indep_thre
                     for j in range(0, i, 1):
                         person_sim[img_ids[i].item()][img_ids[j].item()] += instance_sim[tmp_id[i].item()][tmp_id[j].item()]
                         person_sim[img_ids[j].item()][img_ids[i].item()] += instance_sim[tmp_id[j].item()][tmp_id[i].item()]
-        hybrid_instance_sim, initial_rank = get_hybrid_sim(instance_sim, split_num, person_sim, scene_sim, cfg.PSEUDO_LABELS.lambda_person, cfg.PSEUDO_LABELS.lambda_scene)
+        hybrid_instance_sim, initial_rank = get_hybrid_sim(instance_sim, split_num, person_sim, img_sim, cfg.PSEUDO_LABELS.lambda_person, cfg.PSEUDO_LABELS.lambda_scene, intra_context_mask)
         if cfg.PSEUDO_LABELS.SpCL:
-            labels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, features, initial_rank, cuda, indep_thres, all_inds, **kwargs)
+            labels, centers, num_classes, indep_thres = label_generator_FINCH_context_SpCL(cfg, [features, part_features], initial_rank, cuda, indep_thres, all_inds, intra_context_mask, **kwargs)
         else:
-            labels, centers, num_classes = label_generator_FINCH_context_single(0, features, initial_rank, all_inds=all_inds)
-        # if cfg.PSEUDO_LABELS.use_post_process:
-        #     labels, centers, num_classes = post_process(cfg, labels, hybrid_instance_sim, features)
+            labels, centers, num_classes = label_generator_FINCH_context_single(cfg, 0, [features, part_features], initial_rank, all_inds, intra_context_mask)
 
     return labels, centers, num_classes, indep_thres
 
+@torch.no_grad()
+def get_intra_context_mask(inds):
+    # 获取mask矩阵，将属于同一张图片的行人的相似度设置为无穷大
+    N = inds.shape[0]
+    intra_context_mask = torch.ones((N, N)).bool()
+    unique_inds = set(inds.cpu().numpy())
+    for uid in unique_inds: # image idx
+        b = (inds == uid)
+        tmp_id = b.nonzero().squeeze(-1).tolist()
+        for i in range(len(tmp_id)):
+            for j in range(0, i, 1):
+                intra_context_mask[tmp_id[i]][tmp_id[j]] = intra_context_mask[tmp_id[j]][tmp_id[i]] = False
+    return intra_context_mask
 
-def post_process(cfg, labels, hybrid_instance_sim, features):
+def pairwiseDis(qFeature, gFeature):  # 246s
+    # 计算余弦距离,数值越大,相似度越低
+    x, y = F.normalize(qFeature), F.normalize(gFeature)
+    m, n = x.shape[0], y.shape[0]
+    disMat = torch.pow(x, 2).sum(dim=1, keepdim=True).expand(m, n) + \
+             torch.pow(y, 2).sum(dim=1, keepdim=True).expand(n, m).t()
+    disMat.addmm_(1, -2, x, y.t())
+    return disMat.clamp_(min=1e-5)
+
+@torch.no_grad()
+def re_ranking_for_instance(memory_features, k1, k2=6):
     """
-        将相似度小于阈值的pair删除
+        求扩展K互最近邻
+        rank_k_matrix: [N, N]
     """
-    pair, pair_sim = [], []
-    unique_labels = set(labels.cpu().numpy())
-    num_classes = len(unique_labels)
-    for label in unique_labels:
-        b = (labels == label)
-        tmp_id = b.nonzero()
-        if len(tmp_id) > 1:
-            for i in range(len(tmp_id)):
-                for j in range(0, i, 1):
-                    pair.append((tmp_id[i].item(), tmp_id[j].item()))
-                    pair_sim.append(hybrid_instance_sim[tmp_id[i].item()][tmp_id[j].item()].item())
+    N = memory_features.shape[0]
+    original_dist = pairwiseDis(memory_features, memory_features).cpu().numpy()
+    original_dist = np.transpose(original_dist / (np.max(original_dist, axis=0)))
+    V = np.zeros_like(original_dist).astype(np.float16)
+    initial_rank = np.argsort(original_dist).astype(np.int32)
+    for i in range(N):
+        forward_k_neigh_index = initial_rank[i,:k1+1] 
+        backward_k_neigh_index = initial_rank[forward_k_neigh_index,:k1+1]
+        fi = np.where(backward_k_neigh_index==i)[0]
+        k_reciprocal_index = forward_k_neigh_index[fi]
+        k_reciprocal_expansion_index = k_reciprocal_index
+        for j in range(len(k_reciprocal_index)):
+            candidate = k_reciprocal_index[j]
+            candidate_forward_k_neigh_index = initial_rank[candidate,:int(np.around(k1/2))+1]
+            candidate_backward_k_neigh_index = initial_rank[candidate_forward_k_neigh_index,:int(np.around(k1/2))+1]
+            fi_candidate = np.where(candidate_backward_k_neigh_index == candidate)[0]
+            candidate_k_reciprocal_index = candidate_forward_k_neigh_index[fi_candidate]
+            if len(np.intersect1d(candidate_k_reciprocal_index,k_reciprocal_index))> 2/3*len(candidate_k_reciprocal_index):
+                k_reciprocal_expansion_index = np.append(k_reciprocal_expansion_index,candidate_k_reciprocal_index)
+        
+        k_reciprocal_expansion_index = np.unique(k_reciprocal_expansion_index)
+        weight = np.exp(-original_dist[i, k_reciprocal_expansion_index])
+        V[i, k_reciprocal_expansion_index] = weight / np.sum(weight)
+
+    if k2 != 1:
+        V_qe = np.zeros_like(V, dtype=np.float16)
+        for i in range(N):
+            V_qe[i, :] = np.mean(V[initial_rank[i, :k2], :], axis=0)
+        V = V_qe
+        del V_qe
+    del initial_rank
+    invIndex = []
+    for i in range(N):
+        invIndex.append(np.where(V[:, i] != 0)[0])  # len(invIndex)=N
+
+    jaccard_dist = np.zeros_like(original_dist, dtype=np.float16)
+    for i in range(N):
+        temp_min = np.zeros(shape=[1, N], dtype=np.float16)
+        indNonZero = np.where(V[i, :] != 0)[0]
+        indImages = [invIndex[ind] for ind in indNonZero]
+        for j in range(len(indNonZero)):
+            temp_min[0, indImages[j]] = temp_min[0, indImages[j]] + np.minimum(V[i, indNonZero[j]], V[indImages[j], indNonZero[j]])
+        jaccard_dist[i] = 1 - temp_min / (2 - temp_min)
+
+    pos_bool = (jaccard_dist < 0)
+    jaccard_dist[pos_bool] = 0.0
     
-    pair, pair_sim = torch.tensor(pair), torch.tensor(pair_sim)
-    pair_sim = (pair_sim - pair_sim.min()) / (pair_sim.max() - pair_sim.min())
-    pair_select = pair[pair_sim < cfg.PSEUDO_LABELS.filter_threshold]
-    print("The number of pair not satisfy threshold is {}".format(len(pair_select)))
-
-    for pair in pair_select:
-        if (labels == labels[pair[0]]).sum() > 2:
-            labels[pair[0].item()] = num_classes
-            labels[pair[1].item()] = num_classes + 1
-            num_classes += 2
-        else:
-            labels[pair[1].item()] = num_classes
-            num_classes += 1
-
-    centers = generate_cluster_features(labels, features)
-    return labels, centers, num_classes
-
-
-def generate_cluster_features(labels, features):
-    centers = collections.defaultdict(list)
-    for i, label in enumerate(labels):
-        if label == -1:
-            continue
-        centers[labels[i]].append(features[i])
-    centers = [
-        torch.stack(centers[idx], dim=0).mean(0) for idx in sorted(centers.keys())
-    ]
-    centers = torch.stack(centers, dim=0)
-    return centers
+    jaccard_dist = 1 - jaccard_dist
+    return jaccard_dist

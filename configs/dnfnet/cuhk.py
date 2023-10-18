@@ -4,28 +4,11 @@ _base_ = [
     '../_base_/schedules/schedule_1x_reid_norm_base.py', '../_base_/default_runtime.py'
 ]
 TEST = False
-USE_PART_FEAT = True
+USE_PART_FEAT = False
 GLOBAL_WEIGHT = 0.8
-UNCERTAINTY = True
+UNCERTAINTY = False
 USE_GFN = False
 model = dict(
-    # backbone=dict(
-    #     type='ResNet',
-    #     depth=50,
-    #     dilations=(1, 1, 1, 1),
-    #     out_indices=(1, 2, 3),
-    #     strides=(1, 2, 2, 1),
-    #     num_stages=4,
-    #     frozen_stages=1,
-    #     norm_cfg=dict(type='BN', requires_grad=False),
-    #     norm_eval=True,
-    #     style='caffe'),
-    # neck=dict(
-    #     type='FPNs16C45add',
-    #     in_channels=[512, 1024, 2048],
-    #     out_channels=1024,
-    #     use_dconv=True,
-    #     kernel1=True),
     roi_head=dict(
         type='ReidRoIHeadDNFNet',
         use_gfn=USE_GFN,
@@ -52,9 +35,11 @@ model = dict(
             use_cluster_hard_loss=True,
             use_quaduplet_loss=True,
             use_part_feat=USE_PART_FEAT,
-            update_method='momentum',    # ['momentum', 'iou', 'max_iou', 'momentum_max_iou', 'gt']
             num_features=256,
-            use_deform=True,
+            cluster_mean_method='naive',    # ['naive', 'time_consistency', 'soft_time_consistency']
+            tc_winsize=100, # for time_consistency
+            decay_weight=-0.001, # for soft_time_consistency
+            update_method='momentum',    # ['momentum', 'iou', 'max_iou', 'momentum_max_iou', 'gt']
         )
     )
 )
@@ -176,13 +161,17 @@ PSEUDO_LABELS = dict(
     filter_threshold=0.2,
     use_crop=False,
     use_k_reciprocal_nearest=False,
+    K=10,
     part_feat=dict(use_part_feat=USE_PART_FEAT, 
                     global_weight=GLOBAL_WEIGHT,
                     uncertainty=UNCERTAINTY,
                     uncertainty_threshold=0.5,
                     global_weights=[1.0, 0.8]
                     ),
-    K=10,
+    inter_cluster=dict(
+                    use_inter_cluster=False, # USE_PART_FEAT==False启动
+                    T=1,
+                    )
 )
 workflow = [('train', 1)]
 evaluation = dict(start=0, interval=30, metric='bbox')

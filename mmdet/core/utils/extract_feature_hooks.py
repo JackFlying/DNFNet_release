@@ -67,9 +67,9 @@ class ExtractFeatureHook(Hook):
             features, img_ids, person_ids, std_features, features_unnorm, gt_features, gt_part_features = self.extract_features(
                         runner.model, self.dataloader, self.dataloader.dataset, with_path=False, prefix="Extract: ", \
                         pretrained_feature_file=self.pretrained_feature_file)
-            if self.cfg.save_features:
-                torch.save(features, os.path.join("saved_file", "features.pth"))
-                torch.save(person_ids, os.path.join("saved_file", "person_ids.pth"))
+            # if self.cfg.save_features:
+            # torch.save(features, os.path.join("saved_file", "features.pth"))
+            # torch.save(person_ids, os.path.join("saved_file", "person_ids.pth"))
 
         if self.use_part_feats:
             part_features = torch.load(os.path.join("saved_file", "part_features.pth"))
@@ -297,6 +297,7 @@ class ExtractFeatureHook(Hook):
             else:
                 all_std_features = None
                 
+        torch.save(all_features, os.path.join("saved_file", "features.pth"))
         torch.save(all_person_ids, os.path.join("saved_file", "person_ids.pth"))
         torch.save(img_metas, os.path.join("saved_file", "img_metas.pth"))
 
