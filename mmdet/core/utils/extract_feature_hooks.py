@@ -169,7 +169,7 @@ class ExtractFeatureHook(Hook):
                 person_ids[gt_ids] = gt_person_ids  # For PRW datasets
                 prog_bar.update()
                 continue
-            # import ipdb;    ipdb.set_trace()
+
             new_data = {'proposals':data['gt_bboxes'], 'img': data['img'], 'img_metas': data['img_metas'], 'use_crop':False}
             result = model(return_loss=False, rescale=False, **new_data)
             reid_features = torch.from_numpy(result[0][0][:, 5:5+256])
@@ -211,6 +211,7 @@ class ExtractFeatureHook(Hook):
                     if self.use_feature_std:
                         std_features = torch.zeros(dataset.id_num, std_feats.shape[1])
                     img_metas = {}
+                    # gt_bboxes = {}
 
             #align gt box and predicted box
             result_boxes = torch.from_numpy(result[0][0][:, :4])

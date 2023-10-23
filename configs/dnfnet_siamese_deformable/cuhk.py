@@ -6,90 +6,78 @@ _base_ = [
 TEST = False
 USE_PART_FEAT = True
 GLOBAL_WEIGHT = 0.8
-CO_LEARNING = False
 UNCERTAINTY = True
-HARD_MINING = True
 USE_GFN = False
+USE_GT_BRANCH_MEMORY_BANK = False
 model = dict(
-    # backbone=dict(
-    #     type='ResNet',
-    #     depth=50,
-    #     dilations=(1, 1, 1, 1),
-    #     out_indices=(1, 2, 3),
-    #     strides=(1, 2, 2, 1),
-    #     num_stages=4,
-    #     frozen_stages=1,
-    #     norm_cfg=dict(type='BN', requires_grad=False),
-    #     norm_eval=True,
-    #     style='caffe'),
-    # neck=dict(
-    #     type='FPNs16C45add',
-    #     in_channels=[512, 1024, 2048],
-    #     out_channels=1024,
-    #     use_dconv=True,
-    #     kernel1=True),
+    type='TwoStageDetectorSiamesePart',
+    mask_ratio=0.2, # 用不到
+    pixel_mask=False,   # 用不到
+    num_mask_patch=2,
+    pro_mask=0.5,
+    use_mask=False, # default: True
+    mask_up=False,   # defalut: True
+    mask_down=False,
+    gt_assigner=dict(
+        type='MaxIoUAssigner',
+        pos_iou_thr=0.7,  
+        neg_iou_thr=0.1, 
+        min_pos_iou=0.5,
+        match_low_quality=False,
+        ignore_iof_thr=-1),
+    backbone=dict(
+        type='ResNet',
+        depth=50,
+        dilations=(1, 1, 1, 1),
+        out_indices=(1, 2, 3),
+        strides=(1, 2, 2, 1),
+        num_stages=4,
+        frozen_stages=1,
+        norm_cfg=dict(type='BN', requires_grad=False),
+        norm_eval=True,
+        style='caffe'),
+    neck=dict(
+        type='FPNs16C45add',
+        in_channels=[512, 1024, 2048],
+        out_channels=1024,
+        use_dconv=True,
+        kernel1=True),
     roi_head=dict(
-        type='ReidRoIHeadDNFNet',
+        type='ReidRoIHeadDnfnetsiameseDeformable',
         use_gfn=USE_GFN,
         use_RoI_Align_feat=False,
         use_part_feat=USE_PART_FEAT,
         scene_emb_size=56,
-        shared_head=dict(
-            type='ResLayer',
-            depth=50,
-            stage=3,
-            stride=2,
-            dilation=1,
-            style='caffe',
-            norm_cfg=dict(type='BN', requires_grad=False),
-            norm_eval=True),
         bbox_head=dict(
-            testing=TEST,
-            type='DNFNetHead',
+            type='DNFNetSiameseHeadDeformable',
+            in_channels=1024,
             id_num=55272,
-            rcnn_bbox_bn=True,
+            testing=TEST,
+            rcnn_bbox_bn=False,
             cluster_top_percent=0.6,
-            instance_top_percent=1.0,
-            use_quaduplet_loss=True,
-            use_cluster_hard_loss=True,
-            use_instance_hard_loss=False,
-            use_IoU_loss=False,
-            use_IoU_memory=False,
-            use_uncertainty_loss=UNCERTAINTY,
-            use_hard_mining=HARD_MINING,
-            norm_type='l2norm',    # ['l2norm', 'protonorm', 'batchnorm']
-            seperate_norm=False,
-            use_bn_affine=False,
-            update_method='momentum',    # ['momentum', 'iou', 'max_iou']
-            co_learning=CO_LEARNING,
-            use_max_IoU_bbox=False,
-            IoU_loss_clip=[0.7, 1.0],
-            IoU_memory_clip=[0.05, 0.9],
-            IoU_momentum=0.1,
             momentum=0.2,
+            IoU_memory_clip=[0.2, 0.9],
+            use_cluster_hard_loss=True,
+            use_quaduplet_loss=True,
             use_part_feat=USE_PART_FEAT,
-            global_weight= GLOBAL_WEIGHT if USE_PART_FEAT else 1,
-            use_hybrid_loss=False,
-            use_instance_loss=False,
-            use_inter_loss=False,
-            triplet_instance_weight=1,
+            cluster_mean_method='naive',    # ['naive', 'time_consistency', 'soft_time_consistency']
+            tc_winsize=100, # for time_consistency
+            decay_weight=-0.001, # for soft_time_consistency
+            update_method='momentum',    # ['momentum', 'iou', 'max_iou', 'momentum_max_iou', 'gt']
             num_features=256,
-            margin=0.3,
-            loss_bbox=dict(type='L1Loss', loss_weight=1),
-            loss_reid=dict(loss_weight=1.0),
-            gfn_config=dict(
-                use_gfn=USE_GFN,
-                gfn_mode='image',    # {'image', 'separate', 'combined'}
-                gfn_activation_mode='se',   # combined:{'se', 'sum', 'identity'}
-                gfn_filter_neg=True,
-                gfn_query_mode='batch', # {'batch', 'oim'}
-                gfn_use_image_lut=True,
-                gfn_train_temp=0.1,
-                gfn_se_temp=0.2,
-                gfn_num_sample=(1, 1),
-                emb_dim=2048,
-            )
-            )
+            use_deform=True,
+            use_siamese=True,  # Whether to use double branches, clustering and memory bank both use mixed features
+            use_gt_branch_memory_bank=USE_GT_BRANCH_MEMORY_BANK,
+        ),
+        bbox_roi_extractor=dict(
+            type='SingleRoIExtractor',
+            roi_layer=dict(
+                type='DeformRoIPoolPack',
+                output_size=tuple([14, 6]),
+                output_channels=1024),
+            out_channels=1024,
+            featmap_strides=[16]
+        )
     )
 )
 # use caffe img_norm
@@ -201,27 +189,28 @@ PSEUDO_LABELS = dict(
     k2=6, # for jaccard distance
     search_type=0, # 0,1,2 for GPU, 3 for CPU (work for faiss)
     cluster_num=None,
-    iters=2,
+    iters=3,
     lambda_scene=0,    # default: 0.3
-    lambda_person=0.1,
+    lambda_person=0.3,
     context_method='zero',    # sum, max, zero
     threshold=0.5,
     use_post_process=False,
     filter_threshold=0.2,
     use_crop=False,
     use_k_reciprocal_nearest=False,
+    K=10,
     part_feat=dict(use_part_feat=USE_PART_FEAT, 
                     global_weight=GLOBAL_WEIGHT,
-                    part_weight=(1 - GLOBAL_WEIGHT)/2,
                     uncertainty=UNCERTAINTY,
-                    ),
-    hard_mining=dict(use_hard_mining=HARD_MINING,
                     uncertainty_threshold=0.5,
-                    label_refine_iters=0,
-                    refine_global_weight=0.5),
-    K=10,
+                    global_weights=[1.0, 0.8]
+                    ),
+    inter_cluster=dict(
+                    use_inter_cluster=False,
+                    T=1,
+                    )
 )
-# fp16 = dict(loss_scale=512.)
+
 workflow = [('train', 1)]
 evaluation = dict(start=0, interval=30, metric='bbox')
 testing = TEST

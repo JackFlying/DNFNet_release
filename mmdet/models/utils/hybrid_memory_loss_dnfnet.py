@@ -260,7 +260,9 @@ class HybridMemoryMultiFocalPercentDnfnet(nn.Module):
                 """
                     (x1, a) and (x2, 1) are two points that determine a straight line
                 """
-                return (x - x2) / (x1 - x2) * (a - 1) + 1
+                weight = (x - x2) / (x1 - x2) * (a - 1) + 1
+                weight[weight < 0] = 0
+                return weight
 
             # self.decay_weight Control weight_floor. -0.00x indicates that every x00 iteration, weight_floor decays 0.1
             # The greater the interval, the smaller the weight_min
