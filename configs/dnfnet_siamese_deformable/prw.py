@@ -3,7 +3,7 @@ _base_ = [
     '../_base_/datasets/coco_reid_unsup_prw.py',
     '../_base_/schedules/schedule_1x_reid_norm_base.py', '../_base_/default_runtime.py'
 ]
-TEST = False
+TEST = True
 USE_PART_FEAT = True
 GLOBAL_WEIGHT = 0.9
 UNCERTAINTY = True  # USE dual label when USE_PART_FEAT=True
@@ -63,6 +63,8 @@ model = dict(
             cluster_mean_method='soft_time_consistency',    # ['naive', 'time_consistency', 'soft_time_consistency']
             tc_winsize=100, # for time_consistency
             decay_weight=-0.0005, # for soft_time_consistency
+            tc_method='linear', # ['linear', 'concave_function', 'convex_function']
+            tc_index=0.1,
             update_method='momentum',    # ['momentum', 'iou', 'max_iou', 'momentum_max_iou', 'gt']
             num_features=256,
             use_deform=True,
@@ -181,7 +183,7 @@ PSEUDO_LABELS = dict(
     norm_feat=True,
     norm_center=True,
     SpCL=True,
-    cluster='FINCH_context_SpCL_Plus',   # dbscan_context, FINCH_context, FINCH_context_SpCL, FINCH_context_SpCL_Plus
+    cluster='dbscan_context',   # dbscan_context, FINCH_context, FINCH_context_SpCL, FINCH_context_SpCL_Plus
     eps=[0.68, 0.7, 0.72],
     min_samples=4, # for dbscan
     dist_metric='jaccard',

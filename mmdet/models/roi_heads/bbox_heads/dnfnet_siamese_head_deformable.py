@@ -54,6 +54,8 @@ class DNFNetSiameseHeadDeformable(nn.Module):
                  cluster_mean_method='naive',
                  tc_winsize=500,
                  decay_weight=-0.001,
+                 tc_method='linear',
+                 tc_index=0.5,
                  update_method=None,
                  num_features=256,
                  triplet_weight=1,
@@ -96,7 +98,7 @@ class DNFNetSiameseHeadDeformable(nn.Module):
                                                         IoU_memory_clip, use_part_feat, update_method, cluster_mean_method, tc_winsize)
         else:
             self.loss_reid = HybridMemoryMultiFocalPercentDnfnet(num_features, id_num, temperature, momentum, cluster_top_percent, use_cluster_hard_loss, testing,
-                                                        IoU_memory_clip, use_part_feat, update_method, cluster_mean_method, tc_winsize, decay_weight)
+                                                        IoU_memory_clip, use_part_feat, update_method, cluster_mean_method, tc_winsize, decay_weight, tc_method, tc_index)
         self.loss_triplet = Quaduplet2Loss(bg_weight=triplet_bg_weight)
         self.use_quaduplet_loss = use_quaduplet_loss
         self.reid_loss_weight = loss_reid['loss_weight']
@@ -565,7 +567,6 @@ class DNFNetSiameseHeadDeformable(nn.Module):
                 scale_factor = bboxes.new_tensor(scale_factor)
                 bboxes = (bboxes.view(bboxes.size(0), -1, 4) /
                           scale_factor).view(bboxes.size()[0], -1)
-
         if cfg is None:
             return bboxes, scores
         else:
@@ -584,6 +585,7 @@ class DNFNetSiameseHeadDeformable(nn.Module):
                 det_bboxes = torch.cat([det_bboxes, det_ids], dim=1)
 
             else:
+                # import ipdb;    ipdb.set_trace()
                 det_bboxes, det_labels, det_ids = multiclass_nms_aug(bboxes, scores, [id_pred, tmp_feat],
                                                         cfg.score_thr, cfg.nms,
                                                         cfg.max_per_img)

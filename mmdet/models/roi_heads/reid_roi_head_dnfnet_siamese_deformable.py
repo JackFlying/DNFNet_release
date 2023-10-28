@@ -241,6 +241,7 @@ class ReidRoIHeadDnfnetsiameseDeformable(BaseRoIHead, BBoxTestMixin, MaskTestMix
                            rcnn_test_cfg,
                            rescale=False):
         """Test only det bboxes without augmentation."""
+
         rois = bbox2roi(proposals)
         bbox_results = self._bbox_forward(x, rois, gt_x_list, proposals)
         img_shapes = tuple(meta['img_shape'] for meta in img_metas)
@@ -271,6 +272,7 @@ class ReidRoIHeadDnfnetsiameseDeformable(BaseRoIHead, BBoxTestMixin, MaskTestMix
         # apply bbox post-processing to each image individually
         det_bboxes = []
         det_labels = []
+        # import ipdb;    ipdb.set_trace()
         for i in range(len(proposals)):
             det_bbox, det_label = self.bbox_head.get_bboxes(
                 rois[i],

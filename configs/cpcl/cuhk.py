@@ -67,18 +67,6 @@ model = dict(
             margin=0.3,
             loss_bbox=dict(type='L1Loss', loss_weight=1),
             loss_reid=dict(loss_weight=1.0),
-            gfn_config=dict(
-                use_gfn=USE_GFN,
-                gfn_mode='image',    # {'image', 'separate', 'combined'}
-                gfn_activation_mode='se',   # combined:{'se', 'sum', 'identity'}
-                gfn_filter_neg=True,
-                gfn_query_mode='batch', # {'batch', 'oim'}
-                gfn_use_image_lut=True,
-                gfn_train_temp=0.1,
-                gfn_se_temp=0.2,
-                gfn_num_sample=(1, 1),
-                emb_dim=2048,
-            )
         )
     )
 )

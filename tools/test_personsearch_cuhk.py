@@ -48,7 +48,7 @@ def single_gpu_test(model,
             #print(batch_size)
             if result[0][0].shape[0]>0:
                 gboxes.append(result[0][0][:, :5])
-                gfeatures.append(normalize(result[0][0][:, 5:]))
+                gfeatures.append(normalize(result[0][0][:, 5:5+256]))
             else:
                 gboxes.append(np.zeros((0, 5), dtype=np.float32))
                 gfeatures.append(np.zeros((0, 256), dtype=np.float32))
@@ -79,7 +79,7 @@ def single_gpu_test(model,
             scales = data['img_metas'][0].data[0][0]['scale_factor']
         if max_iou_with_proposal:
             scales = data['img_metas'][0].data[0][0]['scale_factor']
-            proposal = proposal/scales
+            proposal = proposal / scales
 
         if max_iou_with_proposal:
             boxes = result[0][0][:, :4]
@@ -95,9 +95,9 @@ def single_gpu_test(model,
             inters = w * h
             IoU = inters / (areas + area - inters)
             iou_i = np.argmax(IoU)
-            pfeatures.append(normalize(result[0][0][iou_i:iou_i+1, 5:]))
+            pfeatures.append(normalize(result[0][0][iou_i:iou_i+1, 5:5+256]))
         else:
-            pfeatures.append(normalize(result[0][0][:, 5:]))
+            pfeatures.append(normalize(result[0][0][:, 5:5+256]))
 
         for _ in range(batch_size):
             prog_bar.update()
@@ -277,7 +277,6 @@ def main():
         model.CLASSES = checkpoint['meta']['CLASSES']
     else:
         model.CLASSES = dataset.CLASSES
-
     if not args.load_results:
         if not distributed:
             model = MMDataParallel(model, device_ids=[0])
@@ -300,13 +299,10 @@ def main():
         gfeatures = mmcv.load("gallery_features.pkl")
         pfeatures = mmcv.load("probe_features.pkl")
     
-    if args.load_gallery:
-        gboxes = mmcv.load("gallery_detections.pkl")
-        gfeatures = mmcv.load("gallery_features.pkl")
-
-    # gboxes = mmcv.load("gallery_detections.pkl")
-    # gfeatures = mmcv.load("gallery_features.pkl")
-    # pfeatures = mmcv.load("probe_features.pkl")
+    # if args.load_gallery:
+    #     gboxes = mmcv.load("gallery_detections.pkl")
+    #     gfeatures = mmcv.load("gallery_features.pkl")
+    #     pfeatures = mmcv.load("probe_features.pkl")
 
      # Evaluate
     dataset = PSDB("psdb_test", cfg.data_root)

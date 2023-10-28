@@ -225,7 +225,6 @@ class CustomDataset(Dataset):
         if self.proposals is not None:
             results['proposals'] = self.proposals[idx]
         self.pre_pipeline(results)
-        # print("results", results)
         return self.pipeline(results)
 
     @classmethod

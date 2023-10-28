@@ -109,9 +109,9 @@ def single_gpu_test(model,
     dataset = data_loader.dataset
     prog_bar = mmcv.ProgressBar(len(dataset))
     for i, data in tqdm(enumerate(data_loader)):
-        # print(data)
         data['use_crop'] = False
         with torch.no_grad():
+            # import ipdb;    ipdb.set_trace()
             result = model(return_loss=False, rescale=True, **data)
             # RoI_Align_feat = result[0][0][:, 5+256:]
             # RoI_Align_feat = RoI_Align_feat.reshape(-1, 2048, 7, 7)

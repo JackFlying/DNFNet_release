@@ -139,7 +139,7 @@ class HybridMemoryMultiFocalPercentDnfnet(nn.Module):
 
     def __init__(self, num_features, num_memory, temp=0.05, momentum=0.2, cluster_top_percent=0.1, use_cluster_hard_loss=True, testing=False,
                     IoU_memory_clip=[0.2, 0.9], use_part_feat=False, update_method="max_iou", cluster_mean_method="time_consistency", \
-                        tc_winsize=500, decay_weight=-0.001):
+                        tc_winsize=500, decay_weight=-0.001, tc_method='linear', tc_index=0.5):
         super(HybridMemoryMultiFocalPercentDnfnet, self).__init__()
         self.use_cluster_hard_loss = use_cluster_hard_loss
         self.num_features = num_features
@@ -150,6 +150,9 @@ class HybridMemoryMultiFocalPercentDnfnet(nn.Module):
         self.tc_winsize = tc_winsize
         self.clock = 0
         self.decay_weight = decay_weight
+        self.tc_index = tc_index
+        self.tc_method = tc_method
+
 
         if testing == True:
             num_memory = 500
@@ -257,11 +260,17 @@ class HybridMemoryMultiFocalPercentDnfnet(nn.Module):
             labels = labels[tflag_latest == True]   # [N']
         elif self.cluster_mean_method == "soft_time_consistency":
             def time_func(x, x1, x2, a):
-                """
-                    (x1, a) and (x2, 1) are two points that determine a straight line
-                """
-                weight = (x - x2) / (x1 - x2) * (a - 1) + 1
-                weight[weight < 0] = 0
+                if self.tc_method == "linear":
+                    # (x1, a) and (x2, 1) are two points that determine a straight line
+                    weight = (x - x2) / (x1 - x2) * (a - 1) + 1
+                    weight[weight < 0] = 0
+                elif self.tc_method == "concave_function":
+                    weight = 1 / torch.pow(x, self.tc_index)
+                    weight[torch.isinf(weight)] = 1
+                elif self.tc_method == "convex_function":
+                    pass
+                
+                # print(weight)
                 return weight
 
             # self.decay_weight Control weight_floor. -0.00x indicates that every x00 iteration, weight_floor decays 0.1

@@ -4,6 +4,8 @@ import os.path as osp
 import numpy as np
 from scipy.io import loadmat
 from sklearn.metrics import average_precision_score
+import pickle
+from tqdm import tqdm
 
 
 def compute_iou(a, b):
@@ -75,7 +77,6 @@ def evaluate_detections(dataset, gallery_det, threshold=0.5, iou_thresh=0.5, lab
         print("  AP = {:.2%}".format(ap))
 
 
-
 def evaluate_search_nae(
     dataset, gallery_det, gallery_feat, probe_feat, threshold=0.5, gallery_size=100
 ):
@@ -111,7 +112,9 @@ def evaluate_search_nae(
     accs = []
     topk = [1, 5, 10]
     ret = {"image_root": dataset.data_path, "results": []}
-    for i in range(len(dataset.probes)):
+    for i in tqdm(range(len(dataset.probes))):
+        # if i > 60:
+        #     break
         y_true, y_score = [], []
         imgs, rois = [], []
         count_gt, count_tp = 0, 0
@@ -192,12 +195,16 @@ def evaluate_search_nae(
         inds = np.argsort(y_score)[::-1]
         y_score = y_score[inds]
         y_true = y_true[inds]
-        accs.append([min(1, sum(y_true[:k])) for k in topk])
+        acc = ([min(1, sum(y_true[:k])) for k in topk])
+        accs.append(acc)
         # 4. Save result for JSON dump
         new_entry = {
             "probe_img": str(probe_imname),
-            "probe_roi": map(float, list(probe_roi)),
+            "probe_roi": list(probe_roi.squeeze()), #map(float, list(probe_roi)),
             "probe_gt": probe_gt,
+            'ap':ap,
+            'acc':acc,
+            'pid':-1,
             "gallery": [],
         }
         # only save top-10 predictions
@@ -205,12 +212,16 @@ def evaluate_search_nae(
             new_entry["gallery"].append(
                 {
                     "img": str(imgs[inds[k]]),
-                    "roi": map(float, list(rois[inds[k]])),
+                    "roi": list(rois[inds[k]]), #map(float, list(rois[inds[k]])),
                     "score": float(y_score[k]),
                     "correct": int(y_true[k]),
                 }
             )
         ret["results"].append(new_entry)
+
+    with open('evaluate_result.pkl','wb') as f:
+        pickle.dump(ret, f)
+    f.close()
 
     print("Search ranking:")
     print("  mAP = {:.2%}".format(np.mean(aps)))

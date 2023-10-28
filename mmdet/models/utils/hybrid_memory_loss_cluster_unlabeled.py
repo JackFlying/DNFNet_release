@@ -300,6 +300,10 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
         self.idx[:ids.shape[0]].data.copy_(ids.long().to(self.labels.device))
 
     @torch.no_grad()
+    def _init_tflag(self):
+        self.tflag.data.copy_(torch.zeros_like(self.tflag).long()).to(self.labels.device)
+
+    @torch.no_grad()
     def _update_feature(self, features):
         features = F.normalize(features, p=2, dim=1)
         self.features[:features.shape[0]].data.copy_(features.float().to(self.features.device))

@@ -123,11 +123,9 @@ def gt_roidbs(root):
 def main(det_thresh=0.05, gallery_size=-1, ignore_cam_id=True):
     results_path = './'
 
-    data_root='/home/linhuadong/dataset/PRW'
+    data_root = '/home/linhuadong/dataset/PRW'
     probe_set = load_probes(data_root)  # 2057
-    gallery_set = gt_roidbs(data_root)  # 6112
-    # torch.save(probe_set, 'probe_set.pth')
-    # sys.exit()
+    gallery_set = gt_roidbs(data_root)  # 6112, probe在gallery当中
 
     name_id = dict()
     for i, gallery in enumerate(gallery_set):
@@ -135,7 +133,7 @@ def main(det_thresh=0.05, gallery_size=-1, ignore_cam_id=True):
         name_id[name] = i
 
     with open(os.path.join(results_path, 'results_1000.pkl'), 'rb') as fid:
-        all_dets = pickle.load(fid)
+        all_dets = pickle.load(fid) # gallery每张图片的检测和重识别结果
 
     gallery_det, gallery_feat, RoI_Align_feats = [], [], []
     for det in all_dets:    # 6112
@@ -154,7 +152,7 @@ def main(det_thresh=0.05, gallery_size=-1, ignore_cam_id=True):
 
     probe_feat = []
     for probe in probe_set:
-        name = probe['im_name'] # person所在的图片
+        name = probe['im_name']
         query_gt_box = probe['boxes'][0]    # (4, )
     
         id = name_id[name]
@@ -191,17 +189,18 @@ def search_performance_calc(gallery_set, probe_set, gallery_det, gallery_feat, p
     aps = []
     accs = []
     topk = [1, 5, 10]
-    # gallery_set.data_path
     image_root = '/home/linhuadong/dataset/PRW/frames'
     ret = {'image_root': image_root, 'results': []}
     for i in tqdm(range(len(probe_set))):
+        # if i > 60:
+            # break
         y_true, y_score = [], []
         imgs, rois = [], []
         roi_feats = []
         count_gt, count_tp = 0, 0
 
         feat_p = probe_feat[i].ravel()  # [256, ]
-
+        
         probe_imname = probe_set[i]['im_name']
         probe_roi = probe_set[i]['boxes']
         probe_pid = probe_set[i]['gt_pids']
@@ -214,6 +213,7 @@ def search_performance_calc(gallery_set, probe_set, gallery_det, gallery_feat, p
             if probe_pid in x['gt_pids'] and x['im_name'] != probe_imname:
                 gallery_imgs.append(x)
         # find image name and corresponding instance box with the same identity
+
         probe_gts = {}
         for item in gallery_imgs:
             probe_gts[item['im_name']] = item['boxes'][item['gt_pids'] == probe_pid]
@@ -265,6 +265,7 @@ def search_performance_calc(gallery_set, probe_set, gallery_det, gallery_feat, p
                         label[j] = 1
                         count_tp += 1
                         break
+                    
             # roi_feat = roi_feat.reshape(-1, 2048, 7, 7)
             y_true.extend(list(label))
             y_score.extend(list(sim))
@@ -299,7 +300,7 @@ def search_performance_calc(gallery_set, probe_set, gallery_det, gallery_feat, p
                 'roi': list(rois[inds[k]]),
                 'score': float(y_score[k]),
                 'correct': int(y_true[k]),
-                'roi_feats':roi_feats[inds[k]],
+                # 'roi_feats':roi_feats[inds[k]],
             })
         ret['results'].append(new_entry)
     

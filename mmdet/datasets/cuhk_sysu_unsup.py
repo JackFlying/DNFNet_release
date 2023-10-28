@@ -104,7 +104,7 @@ class CUHK_SYSU_UNSUPDataset(CustomDataset):
         else:
             self.query_test_pipeline = Compose(query_test_pipeline)
 
-        #query mode
+        # query mode
         self.query_mode=False
 
         #unsupervised: unique labels

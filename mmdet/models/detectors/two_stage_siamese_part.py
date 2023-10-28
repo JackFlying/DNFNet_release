@@ -359,7 +359,7 @@ class TwoStageDetectorSiamesePart(BaseDetector):
         #         img_gtbbox[:, mask.bool()] = C_mean.squeeze(-1)
 
         x = self.extract_feat(img)
-
+        # import ipdb;    ipdb.set_trace()
         if proposals is None:
             proposal_list = self.rpn_head.simple_test_rpn(x, img_metas)
         else:
