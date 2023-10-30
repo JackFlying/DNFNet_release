@@ -15,6 +15,10 @@ from mmcv import Config
 from pycocotools.coco import COCO
 from mmcv.parallel import DataContainer as DC
 from mmdet.datasets.pipelines import Compose
+from __init__ import *
+
+# info = get_info_sota()
+# dataset_name = 'PRW'
 
 def compute_iou(a, b):
     x1 = max(a[0], b[0])
@@ -350,21 +354,11 @@ class PRW_UNSUPDataset():
         return self.pipeline(results)
 
 
-results_path = "/home/linhuadong/DNFNet/jobs/prw_SC_STC_0p001"
-data_root = '/home/linhuadong/dataset/PRW'
-dataset = 'PRW'
-info = {
-    'PRW':{
-        "config":"/home/linhuadong/DNFNet/jobs/prw_SC_STC_0p001/work_dirs/prw/prw.py",
-        "checkpoint":"/home/linhuadong/DNFNet/jobs/prw_SC_STC_0p001/work_dirs/prw/latest.pth",
-    }
-}
-
-def get_prw_dataset_info(det_thresh=0.5):
+def get_prw_dataset_info(info, det_thresh=0.5, data_root = '/home/linhuadong/dataset/PRW'):
     pname_to_attribute, probes_name_list = load_probes(data_root)  # 2057
     gallery_set = gt_roidbs(data_root)  # 6112, probe在gallery当中
 
-    with open(os.path.join(results_path, 'results_1000.pkl'), 'rb') as fid:
+    with open(os.path.join(info["root_dir"], 'results_1000.pkl'), 'rb') as fid:
         all_dets = pickle.load(fid) # gallery每张图片的检测和重识别结果
 
     gallery_det, gallery_feat = [], []
@@ -389,7 +383,7 @@ def get_prw_dataset_info(det_thresh=0.5):
         if len(inds) > 0:
             name_to_det_feat[name] = (det[inds], feat[inds], pids, cam_id)
 
-    cfg = Config.fromfile(info[dataset]["config"])
+    cfg = Config.fromfile(info["config"])
     PRW_Dataset = PRW_UNSUPDataset(
                             cfg.data.test.ann_file,
                             cfg.data.test.pipeline,
@@ -432,7 +426,7 @@ def search_performance_prw(result, data, pname_to_attribute, name_to_det_feat, g
 
     topk = [1, 5, 10]
     image_root = '/home/linhuadong/dataset/PRW/frames'
-    ret = {'image_root': image_root, 'results': []}
+    # ret = {'image_root': image_root, 'results': []}
 
     y_true, y_score = [], []
     imgs, rois = [], []
@@ -516,7 +510,8 @@ def search_performance_prw(result, data, pname_to_attribute, name_to_det_feat, g
         'ap':ap, 
         'acc':acc,
         'pid':probe_pid,
-        'gallery': []
+        'gallery': [],
+        'image_root': image_root
     }
     # only save top-10 predictions
     for k in range(10):
@@ -527,7 +522,7 @@ def search_performance_prw(result, data, pname_to_attribute, name_to_det_feat, g
                 'correct': int(y_true[k]),
             }
         )
-    ret['results'].append(new_entry)
+    # ret['results'].append(new_entry)
     print(ap, acc)
     
     return new_entry

@@ -13,18 +13,8 @@ import sys
 sys.path.append('/home/linhuadong/DNFNet/tools')
 from person_search.psdb import PSDB
 from ps_model import load_model
+from __init__ import *
 
-dataset_name = 'CUHK'
-info = {
-    'PRW':{
-        "config":"/home/linhuadong/DNFNet/jobs/prw_SC_STC_0p001/work_dirs/prw/prw.py",
-        "checkpoint":"/home/linhuadong/DNFNet/jobs/prw_SC_STC_0p001/work_dirs/prw/latest.pth"
-    },
-    'CUHK':{
-        "config":"/home/linhuadong/DNFNet/jobs/cuhk_hybrid_label_1p0_0p8/work_dirs/cuhk/cuhk.py",
-        "checkpoint":"/home/linhuadong/DNFNet/jobs/cuhk_hybrid_label_1p0_0p8/work_dirs/cuhk/latest.pth",
-    }
-}
 
 def compute_iou(a, b):
     x1 = max(a[0], b[0])
@@ -35,8 +25,8 @@ def compute_iou(a, b):
     union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
     return inter * 1.0 / union
 
-def get_cuhk_dataset_info():
-    cfg = Config.fromfile(info[dataset_name]["config"])
+def get_cuhk_dataset_info(info):
+    cfg = Config.fromfile(info["config"])
     if isinstance(cfg.data.test, dict):
         cfg.data.test.test_mode = True
     elif isinstance(cfg.data.test, list):
@@ -51,8 +41,8 @@ def get_cuhk_dataset_info():
         dist=False,
         shuffle=False)
     
-    gallery_det = mmcv.load("/home/linhuadong/DNFNet/jobs/cuhk_hybrid_label_1p0_0p8/gallery_detections.pkl")
-    gallery_feat = mmcv.load("/home/linhuadong/DNFNet/jobs/cuhk_hybrid_label_1p0_0p8/gallery_features.pkl")
+    gallery_det = mmcv.load(osp.join(info["root_dir"], "gallery_detections.pkl"))
+    gallery_feat = mmcv.load(osp.join(info["root_dir"], "gallery_features.pkl"))
     
     threshold = 0.5
     psdb_dataset = PSDB("psdb_test", cfg.data_root)
@@ -63,7 +53,7 @@ def get_cuhk_dataset_info():
         if len(inds) > 0:
             name_to_det_feat[name] = (det[inds], feat[inds])
     
-    return query_data_loader, name_to_det_feat, psdb_dataset
+    return query_data_loader, psdb_dataset, name_to_det_feat
 
 def get_cuhk_data(query_data_loader, idx):
     data = query_data_loader.dataset[idx]
@@ -73,6 +63,9 @@ def get_cuhk_data(query_data_loader, idx):
     return data
 
 def main():
+
+    info = get_info_sota()
+    dataset_name = 'CUHK'
     model = load_model(info[dataset_name])
     query_data_loader, name_to_det_feat, psdb_dataset = get_cuhk_dataset_info()
     
@@ -98,7 +91,7 @@ def search_performance_cuhk(dataset, name_to_det_feat, result, idx, gallery_size
     protoc = loadmat(osp.join(dataset.root_dir, "annotation/test/train_test", fname + ".mat"))[fname].squeeze()
 
     topk = [1, 5, 10]
-    ret = {"image_root": dataset.data_path, "results": []}
+    # ret = {"image_root": dataset.data_path, "results": []}
     y_true, y_score = [], []
     imgs, rois = [], []
     count_gt, count_tp = 0, 0
@@ -188,6 +181,7 @@ def search_performance_cuhk(dataset, name_to_det_feat, result, idx, gallery_size
         'acc':acc,
         'pid':-1,
         "gallery": [],
+        "image_root": dataset.data_path
     }
     # only save top-10 predictions
     for k in range(10):
@@ -198,7 +192,7 @@ def search_performance_cuhk(dataset, name_to_det_feat, result, idx, gallery_size
                 "correct": int(y_true[k]),
             }
         )
-    ret["results"].append(new_entry)
+    # ret["results"].append(new_entry)
     print(ap, acc)
     return new_entry
 
