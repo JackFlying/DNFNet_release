@@ -19,7 +19,7 @@ def get_info_sota():
 
 def get_info_baseline():
     prw_root_dir = "/home/linhuadong/DNFNet/jobs/prw_base"
-    cuhk_root_dir = "/home/linhuadong/DNFNet/jobs/cuhk_sota"
+    cuhk_root_dir = "/home/linhuadong/DNFNet/jobs/cuhk_base"
     info = {
         'PRW':{
             "root_dir": prw_root_dir,

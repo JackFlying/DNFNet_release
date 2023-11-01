@@ -62,20 +62,6 @@ def get_cuhk_data(query_data_loader, idx):
     data['proposals'] = [DC([data['proposals']])]
     return data
 
-def main():
-
-    info = get_info_sota()
-    dataset_name = 'CUHK'
-    model = load_model(info[dataset_name])
-    query_data_loader, name_to_det_feat, psdb_dataset = get_cuhk_dataset_info()
-    
-    # for idx in [12, 34, 5]:
-    idx = 14
-    data = get_cuhk_data(query_data_loader, idx)
-    with torch.no_grad():
-        result = model(return_loss=False, rescale=True, **data)
-    search_performance_cuhk(psdb_dataset, name_to_det_feat, result, idx, gallery_size=100)
-
 def search_performance_cuhk(dataset, name_to_det_feat, result, idx, gallery_size=100):
     """
     gallery_det (list of ndarray): n_det x [x1, x2, y1, y2, score] per image
@@ -195,6 +181,19 @@ def search_performance_cuhk(dataset, name_to_det_feat, result, idx, gallery_size
     # ret["results"].append(new_entry)
     print(ap, acc)
     return new_entry
+
+def main():
+    info = get_info_sota()
+    dataset_name = 'CUHK'
+    model = load_model(info[dataset_name])
+    query_data_loader, name_to_det_feat, psdb_dataset = get_cuhk_dataset_info(info['CUHK'])
+    
+    # for idx in [12, 34, 5]:
+    idx = 14
+    data = get_cuhk_data(query_data_loader, idx)
+    with torch.no_grad():
+        result = model(return_loss=False, rescale=True, **data)
+    search_performance_cuhk(psdb_dataset, name_to_det_feat, result, idx, gallery_size=100)
 
 if __name__ == '__main__':
     main()

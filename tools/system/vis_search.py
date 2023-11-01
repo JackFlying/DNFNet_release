@@ -23,8 +23,35 @@ def visualize(image_root, probe_img, probe_roi, color, save_name):
 
 def vis_search_result(results):
     colors = ['red', 'green', 'yellow']
-    visualize(results['image_root'], results['probe_img'], results['probe_roi'], colors[2], 'query') # query
+    if 'image_root2' in results.keys(): # 如果是自己上传的, 则需要用新的地址
+        visualize(results['image_root2'], results['probe_img'], results['probe_roi'], colors[2], 'query') # query
+    else:
+        visualize(results['image_root'], results['probe_img'], results['probe_roi'], colors[2], 'query') # query
     for j in range(5):
         info = results['gallery'][j]
-        visualize(results['image_root'], info['img'], info['roi'][:4], colors[info['correct']], save_name=f'top-{j+1}')  # gallery
+        visualize(results['image_root'], info['img'], info['roi'][:4], colors[info['correct']], save_name=f'top_{j+1}')  # gallery
 
+def vis_query(data):
+
+    proposals = data['proposals'][0]._data[0][0]
+    scale_factor = data['img_metas'][0]._data[0][0]['scale_factor']
+    proposals = proposals / scale_factor
+    proposals = proposals.tolist()[0]
+
+    filename = data['img_metas'][0]._data[0][0]['filename']
+    img = Image.open(filename)
+    plt.figure(figsize=(8, 8))
+    plt.xticks([])
+    plt.yticks([])
+    plt.imshow(img)
+
+    ax = plt.gca()
+    down_left_x, down_left_y = proposals[0], proposals[1]
+    width = proposals[2] - proposals[0]
+    height = proposals[3] - proposals[1]
+    rect = plt.Rectangle((down_left_x, down_left_y), width, height, fill=False, edgecolor='yellow', linewidth=1)
+    ax.add_patch(rect)
+    save_root_dir = "/home/linhuadong/DNFNet/tools/system/cache"
+    if not os.path.exists(save_root_dir):
+        os.makedirs(save_root_dir)
+    plt.savefig(os.path.join(save_root_dir, 'query' + '.png'), bbox_inches='tight')

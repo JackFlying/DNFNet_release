@@ -15,10 +15,10 @@ from mmcv import Config
 from pycocotools.coco import COCO
 from mmcv.parallel import DataContainer as DC
 from mmdet.datasets.pipelines import Compose
+from ps_model import load_model
+from vis_search import vis_search_result
 from __init__ import *
 
-# info = get_info_sota()
-# dataset_name = 'PRW'
 
 def compute_iou(a, b):
     x1 = max(a[0], b[0])
@@ -353,7 +353,6 @@ class PRW_UNSUPDataset():
         self.pre_pipeline(results)
         return self.pipeline(results)
 
-
 def get_prw_dataset_info(info, det_thresh=0.5, data_root = '/home/linhuadong/dataset/PRW'):
     pname_to_attribute, probes_name_list = load_probes(data_root)  # 2057
     gallery_set = gt_roidbs(data_root)  # 6112, probe在gallery当中
@@ -527,6 +526,19 @@ def search_performance_prw(result, data, pname_to_attribute, name_to_det_feat, g
     
     return new_entry
 
+def main():
+    info_sota = get_info_sota()
+    model_prw = load_model(info_sota['PRW'])
+    PRW_Dataset, pname_to_attribute, gt_roidb, name_to_det_feat_prw = get_prw_dataset_info(info_sota['PRW'])
+    idx = 2
+    data = get_prw_data(PRW_Dataset, pname_to_attribute, idx)
+    import ipdb;    ipdb.set_trace()
+    with torch.no_grad():
+        result = model_prw(return_loss=False, rescale=True, **data)
+    entry = search_performance_prw(result, data, pname_to_attribute, name_to_det_feat_prw, gt_roidb)
+    vis_search_result(entry)
+    
+
 if __name__ == "__main__":
     idx_ = 2    # idx \in [0, PRW_Dataset.data_infos)
-    
+    main()

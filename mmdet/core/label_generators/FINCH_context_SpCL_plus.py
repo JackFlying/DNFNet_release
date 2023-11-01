@@ -461,9 +461,6 @@ def label_generator_FINCH_context_SpCL_Plus(cfg, features, part_features, cuda=T
         img_sim = get_img_sim_by_mean(instance_sim, split_num, cfg.PSEUDO_LABELS.threshold)
     elif cfg.PSEUDO_LABELS.context_method == "zero":
         img_sim = torch.zeros(len(unique_inds), len(unique_inds))
-    elif cfg.PSEUDO_LABELS.context_method == "scene":
-        scene_features = torch.load("./saved_file/scene_features.pth")
-        scene_sim = scene_features.mm(scene_features.t())
 
     # jaccard_coeff = 0.1
     # jaccard_dist = re_ranking_for_instance(features, k1=100)
