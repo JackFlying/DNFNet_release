@@ -6,9 +6,7 @@ _base_ = [
 TEST = False
 USE_PART_FEAT = False
 GLOBAL_WEIGHT = 0.8
-CO_LEARNING = False
 UNCERTAINTY = False
-HARD_MINING = False
 USE_GFN = False
 model = dict(
     backbone=dict(
@@ -54,11 +52,13 @@ model = dict(
             use_cluster_hard_loss=True,
             norm_type='l2norm',    # ['l2norm', 'protonorm', 'batchnorm']
             use_bn_affine=False,
-            update_method='max_iou',    # ['momentum', 'iou', 'max_iou']
+            update_method='max_iou',    # ['momentum', 'iou', 'max_iou', 'momentum_max_iou']
             use_max_IoU_bbox=False,
             momentum=0.2,
-            cluster_mean_method='time_consistency',    # ['naive', 'intra_cluster', 'time_consistency', 'intra_cluster_time_consistency']
+            cluster_mean_method='soft_time_consistency',    # ['naive', 'intra_cluster', 'time_consistency', 'intra_cluster_time_consistency', 'latest']
             tc_winsize=500,
+            decay_weight=-0.0005,
+            tc_method='linear', # ['linear', 'concave_function', 'convex_function']
             intra_cluster_T=0.1,
             use_part_feat=USE_PART_FEAT,
             global_weight= GLOBAL_WEIGHT if USE_PART_FEAT else 1,
@@ -193,9 +193,10 @@ PSEUDO_LABELS = dict(
                     global_weight=GLOBAL_WEIGHT,
                     uncertainty=UNCERTAINTY,
                     uncertainty_threshold=0.5,
+                    global_weights=[1.0, 0.9]
                     ),
     inter_cluster=dict(
-                    use_inter_cluster=True,
+                    use_inter_cluster=False,
                     T=1,
                     )
 )

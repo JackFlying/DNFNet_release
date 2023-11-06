@@ -132,6 +132,8 @@ class CPCLHead(nn.Module):
                  use_cluster_hard_loss=True,
                  cluster_mean_method='naive',
                  tc_winsize=500,
+                 decay_weight=-0.0005,
+                 tc_method='linear', 
                  intra_cluster_T=0.1,
                  use_part_feat=False,
                  use_quaduplet_loss=True,
@@ -163,7 +165,7 @@ class CPCLHead(nn.Module):
         self.loss_cls = build_loss(loss_cls)
         self.loss_bbox = build_loss(loss_bbox)
         self.loss_reid = HybridMemoryMultiFocalPercentClusterUnlabeled(num_features, id_num, temperature, momentum, cluster_top_percent, instance_top_percent, use_cluster_hard_loss, testing, \
-                                                        use_part_feat, use_max_IoU_bbox, update_method, cluster_mean_method, tc_winsize, intra_cluster_T)
+                                                        use_part_feat, use_max_IoU_bbox, update_method, cluster_mean_method, tc_winsize, intra_cluster_T, decay_weight, tc_method)
         
         self.loss_triplet = Quaduplet2Loss(margin=margin, bg_weight=triplet_bg_weight, instance_weight=triplet_instance_weight)
         self.use_quaduplet_loss = use_quaduplet_loss

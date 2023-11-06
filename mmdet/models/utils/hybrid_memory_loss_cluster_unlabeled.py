@@ -131,7 +131,7 @@ class HM(autograd.Function):
     @staticmethod
     @custom_fwd(cast_inputs=torch.float32)
     def forward(ctx, inputs, indexes, labels, features, cluster_mean, tflag, IoU, update_method, momentum, update_flag, IoU_memory_clip, targets, \
-                        clock, cluster_mean_method, tc_winsize, intra_cluster_T):
+                        clock, cluster_mean_method, tc_winsize, intra_cluster_T, decay_weight):
         ctx.features = features # memory特征
         ctx.cluster_mean = cluster_mean
         ctx.labels = labels
@@ -144,6 +144,7 @@ class HM(autograd.Function):
         ctx.cluster_mean_method = cluster_mean_method
         ctx.tc_winsize = tc_winsize
         ctx.intra_cluster_T = intra_cluster_T
+        ctx.decay_weight = decay_weight
 
         outputs = inputs.mm(ctx.cluster_mean.t())
                 
@@ -182,14 +183,39 @@ class HM(autograd.Function):
                 ctx.cluster_mean[tg] = intra_cluster(ctx.features[ctx.labels == tg], T=ctx.intra_cluster_T)
             elif ctx.cluster_mean_method == "time_consistency":
                 ctx.cluster_mean[tg] = time_consistency(ctx.features[ctx.labels == tg], tflag[ctx.labels == tg], ctx.clock, win_size=ctx.tc_winsize)
+            elif ctx.cluster_mean_method == "soft_time_consistency":
+                ctx.cluster_mean[tg] = soft_time_consistency(ctx.features[ctx.labels == tg], tflag, tflag[ctx.labels == tg], ctx.decay_weight)
             elif ctx.cluster_mean_method == "intra_cluster_time_consistency":
                 ctx.cluster_mean[tg] = intra_cluster_time_consistency(ctx.features[ctx.labels == tg], tflag[ctx.labels == tg], ctx.clock, \
                             win_size=ctx.tc_winsize, T=ctx.intra_cluster_T)
             elif ctx.cluster_mean_method == "latest":
                 ctx.cluster_mean[tg] = latest(ctx.features[ctx.labels == tg], tflag[ctx.labels == tg])
 
-        return grad_inputs, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None
+        return grad_inputs, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None
 
+def time_func(x, x1, x2, a):
+    # (x1, a) and (x2, 1) are two points that determine a straight line
+    weight = (x - x2) / (x1 - x2) * (a - 1) + 1
+    weight[weight < 0] = 0
+    # weight[torch.isinf(weight)] = 1
+    return weight
+
+def soft_time_consistency(memory_features, all_tflag, tflag, decay_weight):
+    """
+        tflag越小表示越久没更新
+        memory_features: [K, D]
+    """
+    # tflag_latest = clock - tflag < win_size
+    # weighted_mean = torch.mean(memory_features[tflag_latest], dim=0) 
+
+    weight_min = decay_weight * (all_tflag.max() - all_tflag.min()) + 1   # pass through (0, 1) and (100, 1 - 0.x)
+    # A line passing through the points (self.tflag.min(), weight_min) and (self.tflag.max(), 1)
+    time_weight = time_func(tflag, all_tflag.min(), all_tflag.max(), weight_min)
+    # sim = sim * time_weight   # [B, N] * [:, N] => [B, N], 降低query和久远特征之间的相似度
+    # time_weight = F.softmax(tflag.float(), dim=0)[:, None]
+    # import ipdb;    ipdb.set_trace()
+    weighted_mean = torch.sum(memory_features * time_weight[:,None], dim=0) / len(tflag)
+    return weighted_mean
 
 def intra_cluster(memory_features, T=0.1):
     """
@@ -242,17 +268,17 @@ def latest(memory_features, tflag):
     return weighted_mean
 
 def hm(inputs, indexes, labels, features, cluster_mean, tflag, IoU, update_method=None, momentum=0.5, update_flag=None, IoU_memory_clip=0.2, \
-            targets=None, clock=0, cluster_mean_method='naive', tc_winsize=500, intra_cluster_T=0.1):
+            targets=None, clock=0, cluster_mean_method='naive', tc_winsize=500, intra_cluster_T=0.1, decay_weight=-0.0005):
     return HM.apply(
         inputs, indexes, labels, features, cluster_mean, tflag, IoU, update_method, torch.Tensor([momentum]).to(inputs.device), update_flag, \
-            torch.Tensor(IoU_memory_clip).to(inputs.device), targets, clock, cluster_mean_method, tc_winsize, intra_cluster_T,
+            torch.Tensor(IoU_memory_clip).to(inputs.device), targets, clock, cluster_mean_method, tc_winsize, intra_cluster_T, decay_weight
     )
 
 class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
 
     def __init__(self, num_features, num_memory, temp=0.05, momentum=0.2, cluster_top_percent=0.1, instance_top_percent=1, \
                     use_cluster_hard_loss=True,  testing=False, use_part_feat=False, use_max_IoU_bbox=False, update_method=None, cluster_mean_method=None,\
-                    tc_winsize=500, intra_cluster_T=0.1, IoU_memory_clip=[0.05, 0.9]):
+                    tc_winsize=500, intra_cluster_T=0.1, decay_weight=-0.001, tc_method='linear', IoU_memory_clip=[0.05, 0.9]):
         super(HybridMemoryMultiFocalPercentClusterUnlabeled, self).__init__()
         self.use_cluster_hard_loss = use_cluster_hard_loss
         self.num_features = num_features
@@ -263,27 +289,24 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
         self.tc_winsize = tc_winsize
         self.intra_cluster_T = intra_cluster_T
         self.IoU_memory_clip = IoU_memory_clip
+        self.cluster_mean_method = cluster_mean_method
+        self.tc_method = tc_method
+        self.decay_weight = decay_weight
         
         if testing == True:
             num_memory = 500
         self.num_memory = num_memory
-
         self.momentum = momentum
         self.temp = temp
 
-        #   for mutli focal
         self.positive_top_percent = 0.1    # 数值越大，难样本比例越大
         self.cluster_top_percent = cluster_top_percent
-        # self.instance_top_percent = instance_top_percent
         self.use_max_IoU_bbox = use_max_IoU_bbox
-        # self.iou_threshold = 0.
-        self.cluster_mean_method = cluster_mean_method
 
         self.idx = torch.zeros(num_memory).long()
         self.register_buffer("features", torch.zeros(num_memory, num_features))
         self.register_buffer("labels", torch.zeros(num_memory).long())
         self.register_buffer("tflag", torch.zeros(num_memory).long())
-
         if self.use_part_feat:
             self.register_buffer("part_features", torch.zeros(num_memory, num_features))
     
@@ -378,6 +401,28 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
             :labels: [N]
             :IoU: [N]
         """
+        
+        # Local window
+        # if self.cluster_mean_method == "soft_time_consistency":
+        #     def time_func(x, x1, x2, a):
+        #         if self.tc_method == "linear":
+        #             # (x1, a) and (x2, 1) are two points that determine a straight line
+        #             weight = (x - x2) / (x1 - x2) * (a - 1) + 1
+        #             weight[weight < 0] = 0
+        #         elif self.tc_method == "concave_function":
+        #             weight = 1 / torch.pow(x, self.tc_index)
+        #             weight[torch.isinf(weight)] = 1
+        #         elif self.tc_method == "convex_function":
+        #             pass
+        #         return weight
+
+        #     # self.decay_weight Control weight_floor. -0.00x indicates that every x00 iteration, weight_floor decays 0.1
+        #     # The greater the interval, the smaller the weight_min
+        #     weight_min = self.decay_weight * (self.tflag.max() - self.tflag.min()) + 1   # pass through (0, 1) and (100, 1 - 0.x)
+        #     # A line passing through the points (self.tflag.min(), weight_min) and (self.tflag.max(), 1)
+        #     time_weight = time_func(self.tflag, self.tflag.min(), self.tflag.max(), weight_min)
+        #     sim = sim * time_weight   # [B, N] * [:, N] => [B, N], 降低query和久远特征之间的相似度
+        
         B = sim.shape[0]
         self.num_memory = labels.shape[0]
         nums = torch.zeros(labels.max() + 1, 1).float().cuda() # many instances belong to a cluster, so calculate the number of instances in a cluster
@@ -388,9 +433,6 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
         mask = mask.expand_as(sim)
         masked_sim = self.masked_softmax_multi_focal(sim.t().contiguous(), mask.t().contiguous(), targets=targets) # sim: u * B, mask:u * B, masked_sim: B * u
         cluster_hard_loss = F.nll_loss(torch.log(masked_sim + 1e-6), targets, reduce=False)
-        # ratio = torch.load(os.path.join('saved_file', 'ratio.pth')).cuda()    # [N]
-        # ratio_batch = ratio[indexes]
-        # cluster_hard_loss = cluster_hard_loss * ratio_batch
         cluster_hard_loss = cluster_hard_loss.mean()
         
         return cluster_hard_loss
@@ -585,7 +627,7 @@ class HybridMemoryMultiFocalPercentClusterUnlabeled(nn.Module):
             inputs, part_inputs = inputs / self.temp, part_inputs / self.temp
         else:
             inputs = hm(feats, indexes, labels, self.features, self.cluster_mean, self.tflag, IoU, self.update_method, self.momentum, update_flag, self.IoU_memory_clip, \
-                        targets, self.clock, self.cluster_mean_method, self.tc_winsize, self.intra_cluster_T)   # [B, N]
+                        targets, self.clock, self.cluster_mean_method, self.tc_winsize, self.intra_cluster_T, self.decay_weight)   # [B, N]
             inputs /= self.temp
 
         if self.use_max_IoU_bbox:

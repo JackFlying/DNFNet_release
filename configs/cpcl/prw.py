@@ -3,12 +3,10 @@ _base_ = [
     '../_base_/datasets/coco_reid_unsup_prw.py',
     '../_base_/schedules/schedule_1x_reid_norm_base.py', '../_base_/default_runtime.py'
 ]
-TEST = True
+TEST = False
 USE_PART_FEAT = False
 GLOBAL_WEIGHT = 0.9
-# CO_LEARNING = False
 UNCERTAINTY = False
-# HARD_MINING = False
 USE_GFN = False
 model = dict(
     backbone=dict(
@@ -48,7 +46,7 @@ model = dict(
             type='CPCLHead',
             id_num=18048,
             rcnn_bbox_bn=False,
-            cluster_top_percent=0.6,    # defalut: 0.6
+            cluster_top_percent=0.6,
             instance_top_percent=1.0,
             use_quaduplet_loss=True,
             use_cluster_hard_loss=True,
@@ -57,8 +55,10 @@ model = dict(
             update_method='max_iou',    # ['momentum', 'iou', 'max_iou', 'momentum_max_iou']
             use_max_IoU_bbox=False,
             momentum=0.2,
-            cluster_mean_method='time_consistency',    # ['naive', 'intra_cluster', 'time_consistency', 'intra_cluster_time_consistency', 'latest']
+            cluster_mean_method='soft_time_consistency',    # ['naive', 'intra_cluster', 'time_consistency', 'intra_cluster_time_consistency', 'latest']
             tc_winsize=500,
+            decay_weight=-0.0005,
+            tc_method='linear', # ['linear', 'concave_function', 'convex_function']
             intra_cluster_T=0.1,
             use_part_feat=USE_PART_FEAT,
             global_weight= GLOBAL_WEIGHT if USE_PART_FEAT else 1,
@@ -67,18 +67,6 @@ model = dict(
             margin=0.3,
             loss_bbox=dict(type='L1Loss', loss_weight=1),
             loss_reid=dict(loss_weight=1.0),
-            # gfn_config=dict(
-            #     use_gfn=USE_GFN,
-            #     gfn_mode='image',    # {'image', 'separate', 'combined'}
-            #     gfn_activation_mode='se',   # combined:{'se', 'sum', 'identity'}
-            #     gfn_filter_neg=True,
-            #     gfn_query_mode='batch', # {'batch', 'oim'}
-            #     gfn_use_image_lut=True,
-            #     gfn_train_temp=0.1,
-            #     gfn_se_temp=0.2,
-            #     gfn_num_sample=(1, 1),
-            #     emb_dim=2048,
-            # )
         )
     )
 )
@@ -208,7 +196,7 @@ PSEUDO_LABELS = dict(
                     global_weights=[1.0, 0.9]
                     ),
     inter_cluster=dict(
-                    use_inter_cluster=True, # USE_PART_FEAT==False启动
+                    use_inter_cluster=False, # USE_PART_FEAT==False启动
                     T=1,
                     )
 )

@@ -45,7 +45,12 @@ def display_prw():
     idx = data_json.get("idx")
     data = get_prw_data(PRW_Dataset, pname_to_attribute, idx)
     vis_query(data)
-    return send_file(os.path.join(cache_dir, "query.png"), mimetype='image/jpeg')
+    # return send_file(os.path.join(cache_dir, "query.png"), mimetype='image/jpeg')
+    based64_image = encoder_image(os.path.join(cache_dir, "query.png"))
+    return jsonify({
+            "image":based64_image
+        }
+    )
 
 @app.route("/display_cuhk", methods=["POST", "GET"])
 def display_cuhk():
@@ -53,48 +58,41 @@ def display_cuhk():
     idx = data_json.get("idx")
     data = get_cuhk_data(query_data_loader, idx)
     vis_query(data)
-    return send_file(os.path.join(cache_dir, "query.png"), mimetype='image/jpeg')
+    based64_image = encoder_image(os.path.join(cache_dir, "query.png"))
+    return jsonify({
+            "image":based64_image
+        }
+    )
+    # return send_file(os.path.join(cache_dir, "query.png"), mimetype='image/jpeg')
 
 @app.route("/upload_image", methods=["POST", "GET"])
 def upload_image():
-    try:
-        data_json = request.get_json()
-        encode_image = data_json.get("image_encoder")
-        img = base64.b64decode(encode_image)
-        image_data = np.fromstring(img, np.uint8)
-        image_data = cv2.imdecode(image_data, cv2.IMREAD_COLOR)
-        cv2.imwrite('./upload/query.jpg', image_data)
-        return  jsonify({
-                "code": 99999999,
-                "msg": "文本为空"
-            })
-    except:
-        return jsonify({
-                "code": 99999999,
-                "msg": "文本为空"
-            })
+    data_json = request.get_json()
+    encode_image = data_json.get("image_encoder")
+    head, context = encode_image.split(",")  # 将base64_str以“,”分割为两部分
+    img = base64.b64decode(context)    # 解码时只要内容部分
+    with open("./upload/query.jpg", 'wb') as f:
+        f.write(img)
+    return  jsonify({
+            "code": 99999999,
+            "msg": "文本为空"
+        })
 
 def encoder_image(image_path):
-    # img_stream = ''
-    # with open(path, 'rb') as img_f:
-    #     img_stream = img_f.read()
-    #     img_stream = base64.b64encode(img_stream)
-    # return img_stream
-
-    pil_img = Image.open(image_path, mode='r') # reads the PIL image
-    byte_arr = io.BytesIO()
-    pil_img.save(byte_arr, format='PNG') # convert the PIL image to byte array
-    encoded_img = encodebytes(byte_arr.getvalue()).decode('ascii') # encode as base64
-    return encoded_img
+    img_stream = ''
+    with open(image_path, 'rb') as img_f:
+        img_stream = img_f.read()
+        img_stream = base64.b64encode(img_stream).decode('utf-8')
+    return img_stream
 
 def encoder_images():
     img_streams = {}
     for file in os.listdir(cache_dir):
         file_path = os.path.join(cache_dir, file)
         img_stream = encoder_image(file_path)
-        img_streams[str(file)] = img_stream
-    
-    return jsonify({'result': img_streams})
+        img_streams[str(file).split('.')[0]] = img_stream
+
+    return jsonify(img_streams)
 
 def process_prw(data_json):
     idx = data_json.get("idx")

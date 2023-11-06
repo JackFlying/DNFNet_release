@@ -1,1 +1,0 @@
-bash: ../../tools/dist_test.sh: 没有那个文件或目录
