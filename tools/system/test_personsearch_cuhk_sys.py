@@ -179,7 +179,7 @@ def search_performance_cuhk(dataset, name_to_det_feat, result, idx, gallery_size
             }
         )
     # ret["results"].append(new_entry)
-    print(ap, acc)
+    print(y_true[:5])
     return new_entry
 
 def main():

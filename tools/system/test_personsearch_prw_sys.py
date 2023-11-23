@@ -412,13 +412,12 @@ def get_prw_data(PRW_Dataset, pname_to_attribute, idx_):
     return data
 
 def search_performance_prw(result, data, pname_to_attribute, name_to_det_feat, gt_roidb, ignore_cam_id=True):
-    
+
     probe_imname = data['img_metas'][0]._data[0][0]['ori_filename']
     attribute = pname_to_attribute[probe_imname]
     probe_roi = attribute['boxes']
     probe_pid = attribute['gt_pids']
     probe_cam = attribute['cam_id']
-
 
     det = result[0][0][:, :5]
     feat_p = normalize(result[0][0][:, 5:5+256], axis=1).ravel()
@@ -522,8 +521,7 @@ def search_performance_prw(result, data, pname_to_attribute, name_to_det_feat, g
             }
         )
     # ret['results'].append(new_entry)
-    print(ap, acc)
-    
+    print(y_true[:5])
     return new_entry
 
 def main():

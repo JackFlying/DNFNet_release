@@ -18,7 +18,7 @@ from base64 import encodebytes
 from PIL import Image
 from __init__ import *
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 cache_dir = "/home/linhuadong/DNFNet/tools/system/cache"
 info_sota = get_info_sota()
 info_base = get_info_baseline()
@@ -33,7 +33,12 @@ _, _, _, name_to_det_feat_prw_base = get_prw_dataset_info(info_base['PRW'])
 query_data_loader, psdb_dataset, name_to_det_feat_cuhk_sota = get_cuhk_dataset_info(info_sota['CUHK'])
 _, _, name_to_det_feat_cuhk_base = get_cuhk_dataset_info(info_base['CUHK'])
 
-MY_PRW_Dataset, _, _ = get_my_prw_dataset_info(info_sota['PRW'])
+_, _, name_to_det_feat_my_prw_sota = get_my_prw_dataset_info(info_sota['PRW'])
+MY_PRW_Dataset, my_gt_roidb, name_to_det_feat_my_prw_base = get_my_prw_dataset_info(info_base['PRW'])
+
+prw_idx_map = {1: 2, 2:3, 3:4, 4:6, 5:7, 6:9, 7:10, 8:16, 9:17, 10:18}
+# 7,11,15,20,21,22,24,31,63,69
+cuhk_idx_map = {1: 7, 2:11, 3:15, 4:20, 5:21, 6:22, 7:24, 8:31, 9:63, 10:69}
 
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False  # 禁止中文转义
@@ -43,7 +48,7 @@ CORS(app,supports_credentials=True)
 def display_prw():
     data_json = request.get_json()
     idx = data_json.get("idx")
-    data = get_prw_data(PRW_Dataset, pname_to_attribute, idx)
+    data = get_prw_data(PRW_Dataset, pname_to_attribute, prw_idx_map[idx])
     vis_query(data)
     # return send_file(os.path.join(cache_dir, "query.png"), mimetype='image/jpeg')
     based64_image = encoder_image(os.path.join(cache_dir, "query.png"))
@@ -56,7 +61,7 @@ def display_prw():
 def display_cuhk():
     data_json = request.get_json()
     idx = data_json.get("idx")
-    data = get_cuhk_data(query_data_loader, idx)
+    data = get_cuhk_data(query_data_loader, cuhk_idx_map[idx])
     vis_query(data)
     based64_image = encoder_image(os.path.join(cache_dir, "query.png"))
     return jsonify({
@@ -97,7 +102,7 @@ def encoder_images():
 def process_prw(data_json):
     idx = data_json.get("idx")
     model_type = data_json['model_type']
-    data = get_prw_data(PRW_Dataset, pname_to_attribute, idx)
+    data = get_prw_data(PRW_Dataset, pname_to_attribute, prw_idx_map[idx])
     with torch.no_grad():
         if model_type == 1:
             result = model_prw_sota(return_loss=False, rescale=True, **data)
@@ -111,14 +116,14 @@ def process_prw(data_json):
 def process_cuhk(data_json):
     idx = data_json.get("idx")
     model_type = data_json['model_type']
-    data = get_cuhk_data(query_data_loader, idx)
+    data = get_cuhk_data(query_data_loader, cuhk_idx_map[idx])
     with torch.no_grad():
         if model_type == 1:
             result = model_cuhk_sota(return_loss=False, rescale=True, **data)
-            entry = search_performance_cuhk(psdb_dataset, name_to_det_feat_cuhk_sota, result, idx, gallery_size=100)
+            entry = search_performance_cuhk(psdb_dataset, name_to_det_feat_cuhk_sota, result, cuhk_idx_map[idx], gallery_size=100)
         else:
             result = model_cuhk_base(return_loss=False, rescale=True, **data)
-            entry = search_performance_cuhk(psdb_dataset, name_to_det_feat_cuhk_base, result, idx, gallery_size=100)
+            entry = search_performance_cuhk(psdb_dataset, name_to_det_feat_cuhk_base, result, cuhk_idx_map[idx], gallery_size=100)
     vis_search_result(entry)
     return encoder_images()
 
@@ -130,10 +135,10 @@ def process_other(data_json):
     with torch.no_grad():
         if model_type == 1:
             result = model_prw_sota(return_loss=False, rescale=True, **data)
-            entry = search_performance_input_prw(result, data, name_to_det_feat_prw_sota, gt_roidb)
+            entry = search_performance_input_prw(result, data, name_to_det_feat_my_prw_sota, my_gt_roidb)
         else:
             result = model_prw_base(return_loss=False, rescale=True, **data)
-            entry = search_performance_input_prw(result, data, name_to_det_feat_prw_base, gt_roidb)
+            entry = search_performance_input_prw(result, data, name_to_det_feat_my_prw_base, my_gt_roidb)
     vis_search_result(entry)  
     return encoder_images()
     

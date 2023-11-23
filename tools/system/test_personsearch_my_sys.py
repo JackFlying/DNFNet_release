@@ -97,6 +97,17 @@ def gt_roidbs(root):
             'cam_id': _get_cam_id(im_name)
             # 'gt_overlaps': overlaps
         })
+
+    left_name = ['c6s2_126001.jpg', 'c6s2_126002.jpg', 'c6s2_126003.jpg']
+    for im_name in left_name:
+        gt_roidb.append({
+            'im_name': im_name,
+            'boxes': -1,
+            'gt_pids': -1,
+            'flipped': -1,
+            'cam_id': -1,
+            # 'gt_overlaps': overlaps
+        })
     return gt_roidb
 
 class PRW_UNSUPDataset():
@@ -157,7 +168,7 @@ class PRW_UNSUPDataset():
 def get_my_prw_dataset_info(info, det_thresh=0.5, data_root = '/home/linhuadong/dataset/PRW'):
     gallery_set = gt_roidbs(data_root)  # 6112, probe在gallery当中
 
-    with open(os.path.join(info["root_dir"], 'results_1000.pkl'), 'rb') as fid:
+    with open(os.path.join(info["root_dir"], 'results_1000_my.pkl'), 'rb') as fid:
         all_dets = pickle.load(fid) # gallery每张图片的检测和重识别结果
 
     gallery_det, gallery_feat = [], []
@@ -173,6 +184,7 @@ def get_my_prw_dataset_info(info, det_thresh=0.5, data_root = '/home/linhuadong/
 
     gt_roidb = gallery_set
     name_to_det_feat = {}
+    
     for gt, det, feat in zip(gt_roidb, gallery_det, gallery_feat):
         name = gt['im_name']
         pids = gt['gt_pids']
@@ -181,7 +193,7 @@ def get_my_prw_dataset_info(info, det_thresh=0.5, data_root = '/home/linhuadong/
         inds = np.where(scores >= det_thresh)[0]
         if len(inds) > 0:
             name_to_det_feat[name] = (det[inds], feat[inds], pids, cam_id)
-
+    
     PRW_Dataset = PRW_UNSUPDataset()
     return PRW_Dataset, gt_roidb, name_to_det_feat
 
