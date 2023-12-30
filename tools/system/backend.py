@@ -1,5 +1,5 @@
 # coding: UTF-8
-from flask import Flask, jsonify, request, send_file
+from flask import Flask, jsonify, request
 from flask_cors import *
 from gevent import pywsgi
 from ps_model import load_model
@@ -7,15 +7,9 @@ from test_personsearch_prw_sys import get_prw_dataset_info, get_prw_data, search
 from test_personsearch_cuhk_sys import get_cuhk_dataset_info, get_cuhk_data, search_performance_cuhk
 from test_personsearch_my_sys import get_my_prw_dataset_info, get_input_prw_data, search_performance_input_prw
 from vis_search import vis_search_result, vis_query
-from utils import *
-import numpy as np
-import cv2
 import base64
 import torch
 import os
-import io
-from base64 import encodebytes
-from PIL import Image
 from __init__ import *
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '1'
@@ -37,7 +31,6 @@ _, _, name_to_det_feat_my_prw_sota = get_my_prw_dataset_info(info_sota['PRW'])
 MY_PRW_Dataset, my_gt_roidb, name_to_det_feat_my_prw_base = get_my_prw_dataset_info(info_base['PRW'])
 
 prw_idx_map = {1: 2, 2:3, 3:4, 4:6, 5:7, 6:9, 7:10, 8:16, 9:17, 10:18}
-# 7,11,15,20,21,22,24,31,63,69
 cuhk_idx_map = {1: 7, 2:11, 3:15, 4:20, 5:21, 6:22, 7:24, 8:31, 9:63, 10:69}
 
 app = Flask(__name__)

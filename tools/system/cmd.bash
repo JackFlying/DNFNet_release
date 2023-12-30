@@ -1,1 +1,0 @@
-CUDA_VISIBLE_DEVICES=3 python test_personsearch_prw_sys.py
