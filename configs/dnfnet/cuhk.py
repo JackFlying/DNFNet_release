@@ -4,9 +4,9 @@ _base_ = [
     '../_base_/schedules/schedule_1x_reid_norm_base.py', '../_base_/default_runtime.py'
 ]
 TEST = False
-USE_PART_FEAT = False
+USE_PART_FEAT = True
 GLOBAL_WEIGHT = 0.8
-UNCERTAINTY = False
+UNCERTAINTY = True
 USE_GFN = False
 model = dict(
     roi_head=dict(

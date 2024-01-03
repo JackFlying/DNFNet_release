@@ -4,9 +4,9 @@ _base_ = [
     '../_base_/schedules/schedule_1x_reid_norm_base.py', '../_base_/default_runtime.py'
 ]
 TEST = False
-USE_PART_FEAT = False
+USE_PART_FEAT = True
 GLOBAL_WEIGHT = 0.8
-UNCERTAINTY = False
+UNCERTAINTY = True
 USE_GFN = False
 USE_GT_BRANCH_MEMORY_BANK = False
 model = dict(
@@ -60,7 +60,7 @@ model = dict(
             use_cluster_hard_loss=True,
             use_quaduplet_loss=True,
             use_part_feat=USE_PART_FEAT,
-            cluster_mean_method='time_consistency',    # ['naive', 'time_consistency', 'soft_time_consistency']
+            cluster_mean_method='soft_time_consistency',    # ['naive', 'time_consistency', 'soft_time_consistency']
             tc_winsize=500, # for time_consistency
             decay_weight=-0.0005, # for soft_time_consistency
             update_method='max_iou',    # ['momentum', 'iou', 'max_iou', 'max_iou_momentum']

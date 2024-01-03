@@ -55,7 +55,7 @@ model = dict(
             update_method='max_iou',    # ['momentum', 'iou', 'max_iou', 'momentum_max_iou']
             use_max_IoU_bbox=False,
             momentum=0.2,
-            cluster_mean_method='soft_time_consistency',    # ['naive', 'intra_cluster', 'time_consistency', 'intra_cluster_time_consistency', 'latest']
+            cluster_mean_method='time_consistency',    # ['naive', 'intra_cluster', 'time_consistency', 'intra_cluster_time_consistency', 'latest']
             tc_winsize=500,
             decay_weight=-0.0005,
             tc_method='linear', # ['linear', 'concave_function', 'convex_function']
@@ -196,7 +196,7 @@ PSEUDO_LABELS = dict(
                     global_weights=[1.0, 0.9]
                     ),
     inter_cluster=dict(
-                    use_inter_cluster=False, # USE_PART_FEAT==False启动
+                    use_inter_cluster=True, # USE_PART_FEAT==False启动
                     T=1,
                     )
 )

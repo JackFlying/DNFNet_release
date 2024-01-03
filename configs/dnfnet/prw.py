@@ -4,9 +4,9 @@ _base_ = [
     '../_base_/schedules/schedule_1x_reid_norm_base.py', '../_base_/default_runtime.py'
 ]
 TEST = False 
-USE_PART_FEAT = False
+USE_PART_FEAT = True
 GLOBAL_WEIGHT = 0.9 # not used
-UNCERTAINTY = False  # 时候用dual label
+UNCERTAINTY = True  # 时候用dual label
 USE_GFN = False
 model = dict(
     roi_head=dict(
@@ -153,10 +153,10 @@ PSEUDO_LABELS = dict(
     k2=6, # for jaccard distance
     search_type=0, # 0,1,2 for GPU, 3 for CPU (work for faiss)
     cluster_num=None,
-    iters=0,    # defalut: 3
+    iters=3,    # defalut: 3
     lambda_scene=0,
     lambda_person=0.1,
-    context_method='max',   # defalut: 'zero'
+    context_method='zero',   # defalut: 'zero'
     threshold=0.5,
     use_post_process=False,
     filter_threshold=0.2,
