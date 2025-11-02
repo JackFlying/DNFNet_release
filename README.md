@@ -1,6 +1,7 @@
 # 安装环境
 1. 本代码在CGPS基础上做的改进：https://github.com/ljpadam/CGPS
 2. 基于mmdetection框架。mmdet==2.4.0，mmcv-full==1.2.6，pytorch==1.7.0
+* 安装完mmdet之后，需要进行编译```python setup.py install```
 * ```conda install pytorch==1.7.0 torchvision==0.8.0 torchaudio==0.7.0 cudatoolkit=11.0 -c pytorch```
 * ```pip install mmcv-full -f https://download.openmmlab.com/mmcv/dist/cu110/torch1.7.0/index.html```
 
